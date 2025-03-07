@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>响应内容查看器</title>
+  <link rel="stylesheet" href="../css/response-viewer.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="info">
+        <div class="url" id="requestUrl"></div>
+        <div class="meta">
+          <span id="requestMethod"></span>
+          <span id="requestType"></span>
+          <span id="timestamp"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="toolbar">
+        <select id="viewMode">
+          <option value="formatted">格式化</option>
+          <option value="raw">原始数据</option>
+          <option value="preview">预览</option>
+        </select>
+        <button id="copyBtn">复制内容</button>
+        <button id="downloadBtn">下载</button>
+      </div>
+      
+      <div class="viewer">
+        <pre id="responseContent"></pre>
+        <div id="previewContent" style="display: none;"></div>
+      </div>
+    </div>
+  </div>
+  <script src="../js/response-viewer.js"></script>
+</body>
+</html>

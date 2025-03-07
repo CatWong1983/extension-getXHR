@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Network Response Capture",
+  "version": "1.0",
+  "description": "捕获并存储网络请求响应体的 Chrome 扩展",
+  "permissions": [
+    "webRequest",
+    "storage",
+    "notifications",
+    "scripting",
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "src/js/background.js",
+    "type": "module"
+  },
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "action": {
+    "default_popup": "src/html/popup.html",
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  },
+  "options_page": "src/html/options.html",
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  }
+}
