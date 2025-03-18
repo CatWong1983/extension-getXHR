@@ -17,6 +17,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   captureToggle.addEventListener('change', async (e) => {
     const newState = e.target.checked;
     await chrome.storage.local.set({ isCapturing: newState });
+    
+    if (newState) {
+      // 开启捕获时清空容器和存储
+      requestContainer.innerHTML = '<div class="empty-message">开始新的捕获...</div>';
+      await chrome.storage.local.set({ responses: [] });
+    }
+    
     chrome.runtime.sendMessage({ 
       type: 'toggleCapture', 
       value: newState 
