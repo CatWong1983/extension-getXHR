@@ -146,25 +146,35 @@ async function handleRequest(details) {
 
       // 获取所有页面的数据
       for (let page = 1; page <= totalPages; page++) {
-        if (!isCapturing) break; // 如果停止捕获则中断循环
+        if (!isCapturing) break;
         
         const pageBody = { ...originalBody, page_num: page };
         
         const result = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: async (url, method, body) => {
+            // 添加随机延时模拟人类行为
+            const randomDelay = Math.floor(Math.random() * 1000) + 500;
+            await new Promise(resolve => setTimeout(resolve, randomDelay));
+
             const response = await fetch(url, {
               method: method,
               headers: {
                 'accept': 'application/json, text/plain, */*',
                 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'content-type': 'application/json;charset=UTF-8'
+                'content-type': 'application/json;charset=UTF-8',
+                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
               },
               body: JSON.stringify(body),
               credentials: 'include',
               mode: 'cors',
               referrerPolicy: 'strict-origin-when-cross-origin'
             });
+
+            if (!response.ok) {
+              throw new Error(`请求失败: ${response.status}`);
+            }
+
             return {
               body: await response.text(),
               status: response.status,
@@ -189,8 +199,11 @@ async function handleRequest(details) {
           headers: responseData.headers
         });
 
-        // 添加延时避免请求过快
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // 动态调整延时：根据页码增加延时
+        const baseDelay = 2000; // 基础延时 2 秒
+        const pageDelay = Math.min(page * 500, 3000); // 每页增加 0.5 秒，最多增加 3 秒
+        const randomDelay = Math.floor(Math.random() * 1000); // 随机延时 0-1 秒
+        await new Promise(resolve => setTimeout(resolve, baseDelay + pageDelay + randomDelay));
       }
 
       // 发送通知
