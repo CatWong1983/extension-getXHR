@@ -1,8 +1,8 @@
 let isCapturing = false;
 let captureConfig = {
-  urlPatterns: [],
-  requestTypes: [],
-  httpMethods: [],
+  urlPatterns: ['https://ad.xiaohongshu.com/api/galaxy/kol/note/list'], // 添加默认匹配URL
+  requestTypes: ['xmlhttprequest'],
+  httpMethods: ['POST'],
   maxCaptures: 100
 };
 let capturedRequests = new Set();
@@ -14,6 +14,10 @@ chrome.storage.local.get(['captureConfig', 'isCapturing'], (result) => {
   }
   if (typeof result.isCapturing !== 'undefined') {
     isCapturing = result.isCapturing;
+    // 根据初始状态设置监听器
+    if (isCapturing) {
+      addRequestListener();
+    }
   }
 });
 
@@ -26,13 +30,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 重置请求集合
     capturedRequests.clear();
     
-    // 重新初始化监听器
-    initializeRequestListener();
+    if (isCapturing) {
+      addRequestListener();
+    } else {
+      removeRequestListener();
+    }
     
+    console.log('捕获状态已切换:', isCapturing);
     sendResponse({ success: true });
     return true;
   }
 });
+
+// 添加请求监听器
+function addRequestListener() {
+  removeRequestListener(); // 先移除现有监听器
+  chrome.webRequest.onBeforeRequest.addListener(
+    handleRequest,
+    { urls: ["<all_urls>"] },
+    ["requestBody"]
+  );
+  console.log('已添加请求监听器');
+}
+
+// 移除请求监听器
+function removeRequestListener() {
+  try {
+    chrome.webRequest.onBeforeRequest.removeListener(handleRequest);
+    console.log('已移除请求监听器');
+  } catch (error) {
+    console.log('移除监听器失败:', error);
+  }
+}
 
 // 请求处理函数
 async function handleRequest(details) {
@@ -47,9 +76,42 @@ async function handleRequest(details) {
     console.log('检测到请求:', details.url);
     
     // 解析原始请求体
-    const originalBody = details.requestBody ? 
-      JSON.parse(decodeURIComponent(String.fromCharCode.apply(null, new Uint8Array(details.requestBody.raw[0].bytes)))) : 
-      null;
+    let originalBody = null;
+    if (details.requestBody && details.requestBody.raw) {
+      const rawData = new Uint8Array(details.requestBody.raw[0].bytes);
+      const decoder = new TextDecoder('utf-8');
+      const decodedStr = decoder.decode(rawData);
+      console.log('原始解码字符串:', decodedStr);
+      
+      try {
+        // 先尝试直接解析
+        originalBody = JSON.parse(decodedStr);
+        
+        // 如果 hot_words 存在且需要解码
+        if (originalBody.hot_words) {
+          originalBody.hot_words = originalBody.hot_words.map(word => {
+            // 检查是否需要解码
+            if (/[^\u0000-\u007F]/.test(word)) {
+              try {
+                // 对于包含非ASCII字符的情况进行特殊处理
+                return Buffer.from(word, 'binary').toString('utf8');
+              } catch (e) {
+                console.error('hot_words 解码失败:', e);
+                return word;
+              }
+            }
+            return word;
+          });
+        }
+      } catch (e) {
+        console.error('JSON解析失败，尝试二次解码:', e);
+        // 如果直接解析失败，尝试进行 URL 解码
+        const urlDecodedStr = decodeURIComponent(decodedStr);
+        originalBody = JSON.parse(urlDecodedStr);
+      }
+      
+      console.log('处理后的请求体:', originalBody);
+    }
 
     if (originalBody) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
