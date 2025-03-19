@@ -80,9 +80,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       // 创建工作簿和工作表
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('笔记数据');
+      const validDataSheet = workbook.addWorksheet('有效数据');
 
-      // 设置列
-      worksheet.columns = [
+      // 设置列（两个工作表使用相同的列设置）
+      const columns = [
         { header: '笔记ID', key: 'noteId' },
         { header: '笔记链接', key: 'noteUrl' },
         { header: '笔记标题', key: 'title' },
@@ -98,13 +99,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         { header: '关键词表达', key: 'keywords' },
         { header: '榜单类型', key: 'listType' }
       ];
+      
+      worksheet.columns = columns;
+      validDataSheet.columns = columns;
 
       // 统计笔记在不同榜单中的出现情况
       const noteListTypes = new Map(); // 记录每个笔记出现在哪些榜单中
       const allNotes = []; // 用于存储所有笔记数据
+      const noteOccurrences = new Map(); // 记录每个笔记在每个榜单中的出现次数
+      const firstOccurrence = new Map(); // 记录每个笔记在每个榜单中第一次出现的索引
 
       // 第一次遍历：收集所有笔记数据并统计榜单出现情况
-      responses.forEach(response => {
+      responses.forEach((response, responseIndex) => {
         try {
           const data = JSON.parse(response.responseBody);
           const requestBody = JSON.parse(response.requestBody);
@@ -117,7 +123,19 @@ document.addEventListener('DOMContentLoaded', async () => {
               const noteId = note.note_info.note_id;
               if (!noteListTypes.has(noteId)) {
                 noteListTypes.set(noteId, new Set());
+                noteOccurrences.set(noteId, { 1: 0, 2: 0 }); // 初始化计数
+                firstOccurrence.set(noteId, { 1: -1, 2: -1 }); // 初始化第一次出现的索引
               }
+              
+              const occurrences = noteOccurrences.get(noteId);
+              occurrences[listType]++; // 增加计数
+              
+              // 只有在当前榜单第一次出现时才标记为第一次
+              const isFirstInCurrentList = firstOccurrence.get(noteId)[listType] === -1;
+              if (isFirstInCurrentList) {
+                firstOccurrence.get(noteId)[listType] = responseIndex;
+              }
+              
               noteListTypes.get(noteId).add(listType);
               
               allNotes.push({
@@ -125,7 +143,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 listType,
                 listTypeName: listType === 1 ? '热度榜' : listType === 2 ? '黑马榜' : '未知',
                 hotWords,
-                keywords
+                keywords,
+                isFirst: isFirstInCurrentList // 只有真正第一次出现的才标记为 true
               });
             });
           }
@@ -207,6 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
           const noteId = row.getCell('noteId').value;
           const noteTitle = row.getCell('title').value;
+          const listType = row.getCell('listType').value === '热度榜' ? 1 : 2;
           
           // 设置包含"二手车"的单元格字体颜色
           if (noteTitle && noteTitle.includes('二手车')) {
@@ -215,6 +235,36 @@ document.addEventListener('DOMContentLoaded', async () => {
               size: 11, 
               color: { argb: 'FFFF0000' } 
             };
+            
+            // 如果是二手车且没有在其他榜单重复出现
+            if (!noteColors.has(noteId)) {
+              row.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFE0E0E0' } // 改为深灰色背景
+              };
+            }
+          }
+          
+          // 设置重复笔记的样式（非第一次出现）
+          if (!allNotes[rowNumber - 2].isFirst) {
+            row.eachCell((cell) => {
+              cell.font = {
+                name: 'Arial',
+                size: 11,
+                color: { argb: '99999999' }, // 灰色
+                strike: true // 删除线
+              };
+            });
+            
+            // 如果没有彩色背景，则添加深灰色背景
+            if (!noteColors.has(noteId)) {
+              row.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFE0E0E0' } // 深灰色背景
+              };
+            }
           }
           
           // 设置重复笔记的背景色
@@ -235,6 +285,67 @@ document.addEventListener('DOMContentLoaded', async () => {
           column.width = 30; // 前三列固定宽度为30
         } else {
           column.width = 15; // 其余列固定宽度为15
+        }
+      });
+
+      // 移除 FILTER 函数相关代码，直接使用下面的数据添加方式
+      
+      // 添加有效数据到第二个表（没有跨榜单重复且是第一次出现的数据，排除二手车）
+      allNotes.forEach(({note, listTypeName, hotWords, keywords, isFirst}) => {
+        const noteId = note.note_info.note_id;
+        const noteTitle = note.note_info.note_title || '';
+        // 只添加没有跨榜单重复、是第一次出现且不是二手车的数据
+        if (isFirst && !noteColors.has(noteId) && !noteTitle.includes('二手车')) {
+          validDataSheet.addRow({
+            noteId,
+            noteUrl: `https://www.xiaohongshu.com/explore/${noteId}?xsec_token=${note.note_info.xsec_token}&xsec_source=pc_ad`,
+            title: noteTitle,
+            type: note.note_info.note_type === 1 ? '图文笔记' : '视频笔记',
+            author: note.author_info.author_name,
+            fans: note.author_info.fans_count,
+            date: formatTimestamp(note.note_create_time),
+            status: note.note_status === 1 ? '公开' : note.note_status,
+            heat: note.heat_value || '0',
+            likes: note.interact || '0',
+            comments: note.comment || '0',
+            hotWords: hotWords.join('、'),
+            keywords: keywords.join('、'),
+            listType: listTypeName
+          });
+        }
+      });
+
+      // 设置有效数据表的样式
+      validDataSheet.eachRow((row, rowNumber) => {
+        row.height = 25;
+        
+        row.eachCell((cell) => {
+          cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: false };
+          cell.font = { name: 'Arial', size: 11 };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            left: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            bottom: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            right: { style: 'thin', color: { argb: 'FFD3D3D3' } }
+          };
+        });
+
+        if (rowNumber === 1) {
+          row.font = { bold: true };
+          row.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFE0E0E0' }
+          };
+        }
+      });
+
+      // 设置有效数据表的列宽
+      validDataSheet.columns.forEach((column, index) => {
+        if (index < 3) {
+          column.width = 30;
+        } else {
+          column.width = 15;
         }
       });
 
