@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>网络请求捕获</title>
-  <script src="../lib/xlsx.full.min.js"></script>
+  <script src="../lib/exceljs.min.js"></script>
   <style>
     body {
       width: 400px;
@@ -32,11 +32,19 @@
     }
     .request-item {
       display: grid;
-      grid-template-columns: auto 1fr auto auto;
+      grid-template-columns: 50px auto 1fr auto auto;
       gap: 8px;
       padding: 8px;
       border-bottom: 1px solid #eee;
       align-items: center;
+    }
+    
+    .total-count {
+      padding: 8px;
+      color: #666;
+      font-weight: bold;
+      border-bottom: 2px solid #eee;
+      margin-bottom: 8px;
     }
     .url-cell {
       overflow: hidden;

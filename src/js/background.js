@@ -1,6 +1,7 @@
 let isCapturing = false;
+let currentRequestId = null;
 let captureConfig = {
-  urlPatterns: ['https://ad.xiaohongshu.com/api/galaxy/kol/note/list'], // 添加默认匹配URL
+  urlPatterns: ['https://ad.xiaohongshu.com/api/galaxy/kol/note/list'],
   requestTypes: ['xmlhttprequest'],
   httpMethods: ['POST'],
   maxCaptures: 100
@@ -14,7 +15,6 @@ chrome.storage.local.get(['captureConfig', 'isCapturing'], (result) => {
   }
   if (typeof result.isCapturing !== 'undefined') {
     isCapturing = result.isCapturing;
-    // 根据初始状态设置监听器
     if (isCapturing) {
       addRequestListener();
     }
@@ -24,30 +24,36 @@ chrome.storage.local.get(['captureConfig', 'isCapturing'], (result) => {
 // 监听消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'toggleCapture') {
-    isCapturing = message.value;
-    chrome.storage.local.set({ isCapturing });
-    
-    // 重置请求集合
-    capturedRequests.clear();
-    
-    if (isCapturing) {
-      addRequestListener();
-    } else {
-      removeRequestListener();
+    try {
+      isCapturing = message.value;
+      
+      if (isCapturing) {
+        // 重置请求集合
+        capturedRequests.clear();
+        addRequestListener();
+      } else {
+        removeRequestListener();
+      }
+      
+      console.log('捕获状态已切换:', isCapturing);
+      sendResponse({ success: true });
+    } catch (error) {
+      console.error('切换捕获状态失败:', error);
+      sendResponse({ success: false, error: error.message });
     }
-    
-    console.log('捕获状态已切换:', isCapturing);
-    sendResponse({ success: true });
     return true;
   }
 });
 
 // 添加请求监听器
 function addRequestListener() {
-  removeRequestListener(); // 先移除现有监听器
+  removeRequestListener();
   chrome.webRequest.onBeforeRequest.addListener(
     handleRequest,
-    { urls: ["<all_urls>"] },
+    { 
+      urls: ["<all_urls>"],
+      types: ["xmlhttprequest"]
+    },
     ["requestBody"]
   );
   console.log('已添加请求监听器');
@@ -68,11 +74,55 @@ async function handleRequest(details) {
   if (!isCapturing) return;
   if (!shouldCaptureRequest(details)) return;
   
-  const requestKey = `${details.url}_${details.method}`;
-  if (capturedRequests.has(requestKey)) return;
-  capturedRequests.add(requestKey);
+  // 解析请求体
+  let originalBody = null;
+  if (details.requestBody && details.requestBody.raw) {
+    const rawData = new Uint8Array(details.requestBody.raw[0].bytes);
+    const decoder = new TextDecoder('utf-8');
+    const decodedStr = decoder.decode(rawData);
+    
+    try {
+      originalBody = JSON.parse(decodedStr);
+    } catch (e) {
+      try {
+        const urlDecodedStr = decodeURIComponent(decodedStr);
+        originalBody = JSON.parse(urlDecodedStr);
+      } catch (error) {
+        console.error('请求体解析失败:', error);
+        return;
+      }
+    }
+  }
 
+  // 只处理第一页的请求
+  if (originalBody && originalBody.page_num !== 1) {
+    return;
+  }
+
+  // 使用不包含页码的信息生成唯一标识
+  const { page_num, ...bodyWithoutPage } = originalBody;
+  const requestKey = `${details.url}_${details.method}_${JSON.stringify(bodyWithoutPage)}`;
+  if (capturedRequests.has(requestKey)) return;
+  
+  const newRequestId = Date.now();
+  
   try {
+    // 终止之前的请求循环
+    if (currentRequestId) {
+      console.log(`终止请求 ${currentRequestId} 的处理`);
+      isCapturing = false;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await notifyPopup({ type: 'newCaptureStarted' });
+    }
+
+    // 清空之前的请求记录并添加新的请求标识
+    capturedRequests.clear();
+    capturedRequests.add(requestKey);
+    
+    // 更新当前请求ID和状态
+    currentRequestId = newRequestId;
+    isCapturing = true;
+    
     console.log('检测到请求:', details.url);
     
     // 解析原始请求体
@@ -84,17 +134,16 @@ async function handleRequest(details) {
       console.log('原始解码字符串:', decodedStr);
       
       try {
-        // 先尝试直接解析
         originalBody = JSON.parse(decodedStr);
         
-        // 如果 hot_words 存在且需要解码
         if (originalBody.hot_words) {
           originalBody.hot_words = originalBody.hot_words.map(word => {
-            // 检查是否需要解码
             if (/[^\u0000-\u007F]/.test(word)) {
               try {
-                // 对于包含非ASCII字符的情况进行特殊处理
-                return Buffer.from(word, 'binary').toString('utf8');
+                const encoder = new TextEncoder();
+                const decoder = new TextDecoder('utf-8');
+                const encoded = encoder.encode(word);
+                return decoder.decode(encoded);
               } catch (e) {
                 console.error('hot_words 解码失败:', e);
                 return word;
@@ -105,7 +154,6 @@ async function handleRequest(details) {
         }
       } catch (e) {
         console.error('JSON解析失败，尝试二次解码:', e);
-        // 如果直接解析失败，尝试进行 URL 解码
         const urlDecodedStr = decodeURIComponent(decodedStr);
         originalBody = JSON.parse(urlDecodedStr);
       }
@@ -146,14 +194,16 @@ async function handleRequest(details) {
 
       // 获取所有页面的数据
       for (let page = 1; page <= totalPages; page++) {
-        if (!isCapturing) break;
-        
+        if (!isCapturing || currentRequestId !== newRequestId) {
+          console.log(`请求 ${newRequestId} 已被终止`);
+          break;
+        }
+
         const pageBody = { ...originalBody, page_num: page };
         
         const result = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: async (url, method, body) => {
-            // 添加随机延时模拟人类行为
             const randomDelay = Math.floor(Math.random() * 1000) + 500;
             await new Promise(resolve => setTimeout(resolve, randomDelay));
 
@@ -186,6 +236,7 @@ async function handleRequest(details) {
 
         const responseData = result[0].result;
 
+        // 添加页码和分组信息到保存的数据中
         await saveResponse({
           url: details.url,
           timestamp: Date.now(),
@@ -196,13 +247,13 @@ async function handleRequest(details) {
           requestBody: JSON.stringify(pageBody),
           responseBody: responseData.body,
           statusCode: responseData.status,
-          headers: responseData.headers
+          headers: responseData.headers,
+          groupId: originalBody.list_type + '_' + originalBody.date  // 添加分组标识
         });
 
-        // 动态调整延时：根据页码增加延时
-        const baseDelay = 2000; // 基础延时 2 秒
-        const pageDelay = Math.min(page * 500, 3000); // 每页增加 0.5 秒，最多增加 3 秒
-        const randomDelay = Math.floor(Math.random() * 1000); // 随机延时 0-1 秒
+        const baseDelay = 2000;
+        const pageDelay = Math.min(page * 500, 3000);
+        const randomDelay = Math.floor(Math.random() * 1000);
         await new Promise(resolve => setTimeout(resolve, baseDelay + pageDelay + randomDelay));
       }
 
@@ -223,31 +274,17 @@ async function handleRequest(details) {
       message: error.message
     });
   } finally {
+    if (currentRequestId === newRequestId) {
+      currentRequestId = null;
+      isCapturing = true;
+    }
     setTimeout(() => {
       capturedRequests.delete(requestKey);
-    }, 30 * 60 * 1000);
+    }, 5000);
   }
-}
-
-// 初始化请求监听器
-function initializeRequestListener() {
-  // 移除现有监听器
-  try {
-    chrome.webRequest.onBeforeRequest.removeListener(handleRequest);
-  } catch (error) {
-    console.log('移除监听器失败:', error);
-  }
-
-  // 添加新监听器
-  chrome.webRequest.onBeforeRequest.addListener(
-    handleRequest,
-    { urls: ["<all_urls>"] },
-    ["requestBody"]
-  );
 }
 
 function shouldCaptureRequest(details) {
-  // URL 匹配检查
   if (captureConfig.urlPatterns.length > 0) {
     const matchesPattern = captureConfig.urlPatterns.some(pattern => {
       try {
@@ -261,7 +298,6 @@ function shouldCaptureRequest(details) {
     if (!matchesPattern) return false;
   }
 
-  // 请求类型检查
   if (captureConfig.requestTypes.length > 0) {
     const type = details.type.toLowerCase();
     const typeMapping = {
@@ -273,7 +309,6 @@ function shouldCaptureRequest(details) {
     if (!captureConfig.requestTypes.includes(mappedType)) return false;
   }
 
-  // HTTP 方法检查
   if (captureConfig.httpMethods.length > 0) {
     if (!captureConfig.httpMethods.includes(details.method)) return false;
   }
@@ -296,5 +331,18 @@ async function saveResponse(capturedData) {
   }
 }
 
-// 初始化监听器
-initializeRequestListener();
+async function notifyPopup(message) {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length > 0) {
+      await chrome.runtime.sendMessage(message)
+        .catch(error => {
+          if (!error.message.includes("Receiving end does not exist")) {
+            console.error('通知失败:', error);
+          }
+        });
+    }
+  } catch (error) {
+    console.error('发送通知失败:', error);
+  }
+}

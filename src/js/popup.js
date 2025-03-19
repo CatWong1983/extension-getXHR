@@ -16,18 +16,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 监听开关变化
   captureToggle.addEventListener('change', async (e) => {
     const newState = e.target.checked;
-    await chrome.storage.local.set({ isCapturing: newState });
     
-    if (newState) {
-      // 开启捕获时清空容器和存储
-      requestContainer.innerHTML = '<div class="empty-message">开始新的捕获...</div>';
-      await chrome.storage.local.set({ responses: [] });
+    try {
+      // 先发送消息给后台并等待响应
+      const response = await chrome.runtime.sendMessage({ 
+        type: 'toggleCapture', 
+        value: newState 
+      });
+      
+      if (response && response.success) {
+        if (newState) {
+          // 开启捕获时清空容器和存储
+          requestContainer.innerHTML = '<div class="empty-message">开始新的捕获...</div>';
+          await chrome.storage.local.set({ responses: [] });
+        }
+        // 更新存储状态
+        await chrome.storage.local.set({ isCapturing: newState });
+      }
+    } catch (error) {
+      console.error('切换捕获状态失败:', error);
+      // 恢复开关状态
+      captureToggle.checked = !newState;
     }
-    
-    chrome.runtime.sendMessage({ 
-      type: 'toggleCapture', 
-      value: newState 
-    });
   });
 
   // 清除所有数据
@@ -65,50 +75,189 @@ document.addEventListener('DOMContentLoaded', async () => {
   exportExcelBtn.addEventListener('click', async () => {
     try {
       const { responses = [] } = await chrome.storage.local.get('responses');
+      console.log('获取到响应数据:', responses.length, '条');
       
-      // 创建 Excel 数据
-      const excelData = [
-        ['笔记ID', '笔记链接', '笔记标题', '笔记类型', '博主昵称', '粉丝数', '笔记发布日期', '笔记状态', '热度值', '赞藏量', '评论量']
+      // 创建工作簿和工作表
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('笔记数据');
+
+      // 设置列
+      worksheet.columns = [
+        { header: '笔记ID', key: 'noteId' },
+        { header: '笔记链接', key: 'noteUrl' },
+        { header: '笔记标题', key: 'title' },
+        { header: '笔记类型', key: 'type' },
+        { header: '博主昵称', key: 'author' },
+        { header: '粉丝数', key: 'fans' },
+        { header: '笔记发布日期', key: 'date' },
+        { header: '笔记状态', key: 'status' },
+        { header: '热度值', key: 'heat' },
+        { header: '赞藏量', key: 'likes' },
+        { header: '评论量', key: 'comments' },
+        { header: '近30天Top10热点词', key: 'hotWords' },
+        { header: '关键词表达', key: 'keywords' },
+        { header: '榜单类型', key: 'listType' }
       ];
 
-      // 处理所有响应数据
+      // 统计笔记在不同榜单中的出现情况
+      const noteListTypes = new Map(); // 记录每个笔记出现在哪些榜单中
+      const allNotes = []; // 用于存储所有笔记数据
+
+      // 第一次遍历：收集所有笔记数据并统计榜单出现情况
       responses.forEach(response => {
-        const data = JSON.parse(response.responseBody);
-        if (data && data.data && data.data.note_list) {
-          data.data.note_list.forEach(note => {
-            const noteUrl = `https://www.xiaohongshu.com/explore/${note.note_info.note_id}?xsec_token=${note.note_info.xsec_token}&xsec_source=pc_ad`;
-            const row = [
-              note.note_info.note_id,
-              noteUrl,
-              note.note_info.note_title,
-              note.note_info.note_type === 1 ? '图文笔记' : '视频笔记',
-              note.author_info.author_name,
-              note.author_info.fans_count,
-              formatTimestamp(note.note_create_time),
-              note.note_status === 1 ? '公开' : note.note_status,
-              note.heat_value || '0',
-              note.interact || '0',
-              note.comment || '0'
-            ];
-            excelData.push(row);
-          });
+        try {
+          const data = JSON.parse(response.responseBody);
+          const requestBody = JSON.parse(response.requestBody);
+          const listType = requestBody.list_type;
+          const hotWords = requestBody.hot_words || [];
+          const keywords = requestBody.keywords || [];
+
+          if (data?.data?.note_list) {
+            data.data.note_list.forEach(note => {
+              const noteId = note.note_info.note_id;
+              if (!noteListTypes.has(noteId)) {
+                noteListTypes.set(noteId, new Set());
+              }
+              noteListTypes.get(noteId).add(listType);
+              
+              allNotes.push({
+                note,
+                listType,
+                listTypeName: listType === 1 ? '热度榜' : listType === 2 ? '黑马榜' : '未知',
+                hotWords,
+                keywords
+              });
+            });
+          }
+        } catch (error) {
+          console.error('处理响应数据时出错:', error);
         }
       });
 
-      // 创建工作表
-      const ws = XLSX.utils.aoa_to_sheet(excelData);
+      // 按笔记ID排序
+      allNotes.sort((a, b) => a.note.note_info.note_id.localeCompare(b.note.note_info.note_id));
 
-      // 设置列宽
-      const colWidths = [20, 60, 40, 10, 20, 10, 20, 10, 10, 10, 10];
-      ws['!cols'] = colWidths.map(width => ({ width }));
+      // 添加排序后的数据
+      allNotes.forEach(({note, listTypeName, hotWords, keywords}) => {
+        const noteId = note.note_info.note_id;
+        const noteTitle = note.note_info.note_title || '';
+        const noteUrl = `https://www.xiaohongshu.com/explore/${noteId}?xsec_token=${note.note_info.xsec_token}&xsec_source=pc_ad`;
+        
+        worksheet.addRow({
+          noteId,
+          noteUrl,
+          title: noteTitle,
+          type: note.note_info.note_type === 1 ? '图文笔记' : '视频笔记',
+          author: note.author_info.author_name,
+          fans: note.author_info.fans_count,
+          date: formatTimestamp(note.note_create_time),
+          status: note.note_status === 1 ? '公开' : note.note_status,
+          heat: note.heat_value || '0',
+          likes: note.interact || '0',
+          comments: note.comment || '0',
+          hotWords: hotWords.join('、'),
+          keywords: keywords.join('、'),
+          listType: listTypeName
+        });
+      });
 
-      // 创建工作簿
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, '笔记数据');
+      // 定义一组背景色
+      const backgroundColors = [
+        'FFE6FFE6', // 淡绿色
+        'FFFFE6E6', // 淡红色
+        'FFE6E6FF', // 淡蓝色
+        'FFFFF0E6', // 淡橙色
+        'FFE6FFFF', // 淡青色
+        'FFFFE6FF'  // 淡紫色
+      ];
+
+      // 为重复笔记分配颜色
+      const noteColors = new Map();
+      let currentColorIndex = 0;
+
+      noteListTypes.forEach((types, noteId) => {
+        if (types.size > 1) {
+          noteColors.set(noteId, backgroundColors[currentColorIndex % backgroundColors.length]);
+          currentColorIndex++;
+        }
+      });
+
+      // 设置样式
+      worksheet.eachRow((row, rowNumber) => {
+        row.height = 25;
+        
+        row.eachCell((cell) => {
+          cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: false };
+          cell.font = { name: 'Arial', size: 11 };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            left: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            bottom: { style: 'thin', color: { argb: 'FFD3D3D3' } },
+            right: { style: 'thin', color: { argb: 'FFD3D3D3' } }
+          };
+        });
+
+        if (rowNumber === 1) {
+          row.font = { bold: true };
+          row.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFE0E0E0' }
+          };
+        } else {
+          const noteId = row.getCell('noteId').value;
+          const noteTitle = row.getCell('title').value;
+          
+          // 设置包含"二手车"的单元格字体颜色
+          if (noteTitle && noteTitle.includes('二手车')) {
+            row.getCell('title').font = { 
+              name: 'Arial', 
+              size: 11, 
+              color: { argb: 'FFFF0000' } 
+            };
+          }
+          
+          // 设置重复笔记的背景色
+          const backgroundColor = noteColors.get(noteId);
+          if (backgroundColor) {
+            row.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: backgroundColor }
+            };
+          }
+        }
+      });
+
+      // 根据内容自动调整列宽
+      worksheet.columns.forEach((column, index) => {
+        if (index < 3) {
+          column.width = 30; // 前三列固定宽度为30
+        } else {
+          column.width = 15; // 其余列固定宽度为15
+        }
+      });
 
       // 导出文件
       const fileName = `note_list_${new Date().toISOString().split('T')[0]}.xlsx`;
-      XLSX.writeFile(wb, fileName);
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      });
+      
+      // 创建下载链接
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      
+      // 清理
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+      }, 0);
+
     } catch (error) {
       console.error('导出失败:', error);
       alert('导出失败: ' + error.message);
@@ -143,13 +292,19 @@ async function loadRequests() {
     return;
   }
 
-  responses.reverse().forEach(response => {
+  const totalCount = document.createElement('div');
+  totalCount.className = 'total-count';
+  totalCount.innerHTML = `共计 ${responses.length} 条请求数据`;
+  requestContainer.appendChild(totalCount);
+
+  responses.reverse().forEach((response, index) => {
     const item = document.createElement('div');
     item.className = 'request-item';
     
     const time = new Date(response.timestamp).toLocaleString();
     
     item.innerHTML = `
+      <span>#${responses.length - index}</span>
       <span>${time}</span>
       <span class="url-cell" title="${response.url}">${response.url}</span>
       <span>${response.type || 'unknown'}</span>
