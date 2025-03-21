@@ -2,94 +2,37 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>网络请求捕获</title>
-  <script src="../lib/exceljs.min.js"></script>
-  <style>
-    body {
-      width: 400px;
-      padding: 16px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-    }
-    .header {
-      margin-bottom: 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .switch {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .actions {
-      display: flex;
-      gap: 8px;
-    }
-    .empty-message {
-      text-align: center;
-      color: #666;
-      padding: 20px;
-    }
-    .request-item {
-      display: grid;
-      grid-template-columns: 50px auto 1fr auto auto;
-      gap: 8px;
-      padding: 8px;
-      border-bottom: 1px solid #eee;
-      align-items: center;
-    }
-    
-    .total-count {
-      padding: 8px;
-      color: #666;
-      font-weight: bold;
-      border-bottom: 2px solid #eee;
-      margin-bottom: 8px;
-    }
-    .url-cell {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    button {
-      padding: 6px 12px;
-      border-radius: 4px;
-      border: 1px solid #ddd;
-      cursor: pointer;
-      background: white;
-      font-size: 14px;
-    }
-    button:hover {
-      background: #f5f5f5;
-    }
-    #exportExcelBtn {
-      background: #4CAF50;
-      color: white;
-      border: none;
-    }
-    #exportExcelBtn:hover {
-      background: #45a049;
-    }
-    #requestContainer {
-      max-height: 400px;
-      overflow-y: auto;
-    }
-  </style>
+  <title>小红书数据采集</title>
+  <link rel="stylesheet" href="../css/popup.css">
 </head>
 <body>
-  <div class="header">
-    <div class="switch">
-      <input type="checkbox" id="captureToggle">
-      <label for="captureToggle">捕获请求</label>
+  <div class="container">
+    <div class="header">
+      <div class="switch-container">
+        <label class="switch">
+          <input type="checkbox" id="captureToggle">
+          <span class="slider"></span>
+        </label>
+        <span class="switch-label">捕获请求</span>
+      </div>
+      <button id="settingsBtn" class="icon-btn" title="设置">⚙️</button>
     </div>
-    <div class="actions">
-      <button id="clearBtn">清除</button>
+
+    <div class="button-group">
+      <button id="clearBtn">清除数据</button>
       <button id="exportBtn">导出JSON</button>
+      <button id="processDataBtn">处理数据</button>
       <button id="exportExcelBtn">导出Excel</button>
-      <button id="settingsBtn">设置</button>
+    </div>
+
+    <div id="requestContainer" class="request-list"></div>
+    <div id="progress-container" style="display: none;">
+      <div class="progress-text"></div>
     </div>
   </div>
-  <div id="requestContainer"></div>
+
+  <script src="../lib/xlsx.full.min.js"></script>
+  <script src="../lib/exceljs.min.js"></script>
   <script src="../js/popup.js"></script>
 </body>
 </html>

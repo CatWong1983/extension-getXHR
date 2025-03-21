@@ -346,3 +346,159 @@ async function notifyPopup(message) {
     console.error('发送通知失败:', error);
   }
 }
+
+
+// 添加 Cookie 管理函数
+async function manageCookies() {
+  try {
+    // 1. 清理旧的 Cookie
+    await chrome.cookies.remove({
+      url: "http://api.moreapi.cn",
+      name: "sessionid"
+    });
+
+    // 2. 设置必要的 Cookies
+    const cookies = [
+      {
+        name: "a1",
+        value: "1954623fe52k7f6segccstft6ignu5wbl2cd4umkp30000112782"
+      },
+      {
+        name: "webId",
+        value: "679150ea5864e6684317e3eb8a289761"
+      },
+      {
+        name: "gid",
+        value: "yj24KJ484j1iyj24KJqidJ762JTWiKMdkSSMSTU9i9K3kfq8I72ED4888yyJWYJ8ydKdWK0q"
+      },
+      {
+        name: "x-user-id-ad.xiaohongshu.com",
+        value: "67b5a91404f0000000000001"
+      },
+      {
+        name: "customerClientId",
+        value: "898486601331467"
+      },
+      {
+        name: "x-user-id-ad-market.xiaohongshu.com",
+        value: "67b5a91404f0000000000001"
+      },
+      {
+        name: "access-token-ad-market.xiaohongshu.com",
+        value: "customer.ad_market.AT-68c517475985715453335642qnxbt564ju3syiap"
+      },
+      {
+        name: "x-user-id-partner.xiaohongshu.com",
+        value: "67b5a91404f0000000000001"
+      },
+      {
+        name: "abRequestId",
+        value: "679150ea5864e6684317e3eb8a289761"
+      },
+      {
+        name: "webBuild",
+        value: "4.60.1"
+      },
+      {
+        name: "customer-sso-sid",
+        value: "68c517483050404079425320nswnbnlnlrglafuw"
+      },
+      {
+        name: "ares.beaker.session.id",
+        value: "1742283454579049065443"
+      },
+      {
+        name: "access-token-ad.xiaohongshu.com",
+        value: "customer.leona.AT-74b4a0fa84804dd690e923e88259fb69-54cf02ecc2d34c098121cecae0cd617d"
+      },
+      {
+        name: "x-user-id-fankui-out.xiaohongshu.com",
+        value: "67b5a91404f0000000000001"
+      },
+      {
+        name: "web_session",
+        value: "0400698cd51570566fff52efef354b233a21fe"
+      },
+      {
+        name: "xsecappid",
+        value: "xhs-pc-web"
+      },
+      {
+        name: "acw_tc",
+        value: "0a0bb31817424403604148528e0591d44995906b787a1394857b27202c064a"
+      },
+      {
+        name: "websectiga",
+        value: "634d3ad75ffb42a2ade2c5e1705a73c845837578aeb31ba0e442d75c648da36a"
+      },
+      {
+        name: "sec_poison_id",
+        value: "3c68b8e7-f875-4699-9335-c10d4e28a467"
+      },
+      {
+        name: "unread",
+        value: "{%22ub%22:%2267d3b0f00000000007035d70%22%2C%22ue%22:%2267dace86000000000603bb9e%22%2C%22uc%22:25}"
+      },
+      {
+        name: "loadts",
+        value: "1742441697553"
+      }
+    ];
+
+    for (const cookie of cookies) {
+      await chrome.cookies.set({
+        url: "http://api.moreapi.cn",
+        name: cookie.name,
+        value: cookie.value,
+        domain: "api.moreapi.cn",
+        path: "/",
+        secure: false,
+        httpOnly: false
+      });
+    }
+  } catch (error) {
+    console.error('Cookie 管理失败:', error);
+  }
+}
+
+// 笔记详情获取函数
+async function fetchNoteDetail(noteInfo) {
+  try {
+    // 先管理 Cookie
+    await manageCookies();
+
+    const myHeaders = new Headers();
+    myHeaders.append("Authorization", "Bearer 2FEmoZ2XeBzGoW2Ao6itxFOIQmu9nIac9msmPNDlZrdVr641LbSc9jzpcVJR2NzW");
+    // myHeaders.append("Cookie", "a1=1954623fe52k7f6segccstft6ignu5wbl2cd4umkp30000112782; webId=679150ea5864e6684317e3eb8a289761; gid=yj24KJ484j1iyj24KJqidJ762JTWiKMdkSSMSTU9i9K3kfq8I72ED4888yyJWYJ8ydKdWK0q; x-user-id-ad.xiaohongshu.com=67b5a91404f0000000000001; customerClientId=898486601331467; x-user-id-ad-market.xiaohongshu.com=67b5a91404f0000000000001; access-token-ad-market.xiaohongshu.com=customer.ad_market.AT-68c517475985715453335642qnxbt564ju3syiap; x-user-id-partner.xiaohongshu.com=67b5a91404f0000000000001; abRequestId=679150ea5864e6684317e3eb8a289761; webBuild=4.60.1; customer-sso-sid=68c517483050404079425320nswnbnlnlrglafuw; ares.beaker.session.id=1742283454579049065443; access-token-ad.xiaohongshu.com=customer.leona.AT-74b4a0fa84804dd690e923e88259fb69-54cf02ecc2d34c098121cecae0cd617d; x-user-id-fankui-out.xiaohongshu.com=67b5a91404f0000000000001; web_session=0400698cd51570566fff52efef354b233a21fe; xsecappid=xhs-pc-web; acw_tc=0a0bb31817424403604148528e0591d44995906b787a1394857b27202c064a; websectiga=634d3ad75ffb42a2ade2c5e1705a73c845837578aeb31ba0e442d75c648da36a; sec_poison_id=3c68b8e7-f875-4699-9335-c10d4e28a467; unread={%22ub%22:%2267d3b0f00000000007035d70%22%2C%22ue%22:%2267dace86000000000603bb9e%22%2C%22uc%22:25}; loadts=1742441697553");
+    myHeaders.append("Content-Type", "application/json");
+    
+    const response = await fetch('http://api.moreapi.cn/api/xhs/note_detail', {
+      method: 'POST',
+      headers: myHeaders,
+      body: JSON.stringify({
+        note_id: noteInfo.note_id,
+        xsec_token: noteInfo.xsec_token,
+        share_text: "",
+        proxy: ""
+      }),
+      credentials: 'include',  // 确保包含 cookies
+      redirect: 'follow'
+    });
+
+    return await response.json();
+  } catch (error) {
+    console.error('获取笔记详情失败:', error);
+    throw error;
+  }
+}
+
+// 添加消息监听器
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'fetchNoteDetail') {
+    fetchNoteDetail(message.noteInfo)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;  // 保持消息通道开启
+  }
+});
