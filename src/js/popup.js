@@ -82,7 +82,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       console.log('开始处理数据:', responses.length, '条');
       processedWorkbook = await processExcelData(responses, true);
-      alert('数据处理完成，可以点击导出Excel按钮导出文件');
+      
+      // 自动下载Excel文件
+      const fileName = `note_list_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const buffer = await processedWorkbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      });
+      
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+      }, 0);
+
+      // alert('数据处理完成，Excel文件已自动下载');
 
     } catch (error) {
       console.error('数据处理失败:', error);
