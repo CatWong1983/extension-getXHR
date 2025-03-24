@@ -2,9 +2,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const captureToggle = document.getElementById('captureToggle');
   const requestContainer = document.getElementById('requestContainer');
   const clearBtn = document.getElementById('clearBtn');
-  const exportBtn = document.getElementById('exportBtn');
+  // const exportBtn = document.getElementById('exportBtn');
   const processDataBtn = document.getElementById('processDataBtn');
-  const exportExcelBtn = document.getElementById('exportExcelBtn');
+  // const exportExcelBtn = document.getElementById('exportExcelBtn');
   const settingsBtn = document.getElementById('settingsBtn');
 
   // 用于存储处理后的数据
@@ -49,27 +49,27 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // 导出JSON数据
-  exportBtn.addEventListener('click', async () => {
-    try {
-      const { responses = [] } = await chrome.storage.local.get('responses');
-      const blob = new Blob([JSON.stringify(responses, null, 2)], {
-        type: 'application/json'
-      });
-      const url = URL.createObjectURL(blob);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  // exportBtn.addEventListener('click', async () => {
+  //   try {
+  //     const { responses = [] } = await chrome.storage.local.get('responses');
+  //     const blob = new Blob([JSON.stringify(responses, null, 2)], {
+  //       type: 'application/json'
+  //     });
+  //     const url = URL.createObjectURL(blob);
+  //     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       
-      await chrome.downloads.download({
-        url: url,
-        filename: `captured-responses-${timestamp}.json`,
-        saveAs: true
-      });
+  //     await chrome.downloads.download({
+  //       url: url,
+  //       filename: `captured-responses-${timestamp}.json`,
+  //       saveAs: true
+  //     });
       
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('导出失败:', error);
-      alert('导出失败: ' + error.message);
-    }
-  });
+  //     URL.revokeObjectURL(url);
+  //   } catch (error) {
+  //     console.error('导出失败:', error);
+  //     alert('导出失败: ' + error.message);
+  //   }
+  // });
 
   // 处理数据
   processDataBtn.addEventListener('click', async () => {
@@ -110,37 +110,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // 导出Excel
-  exportExcelBtn.addEventListener('click', async () => {
-    try {
-      const { responses = [] } = await chrome.storage.local.get('responses');
-      if (responses.length === 0) {
-        alert('没有可导出的数据');
-        return;
-      }
+  // exportExcelBtn.addEventListener('click', async () => {
+  //   try {
+  //     const { responses = [] } = await chrome.storage.local.get('responses');
+  //     if (responses.length === 0) {
+  //       alert('没有可导出的数据');
+  //       return;
+  //     }
 
-      const workbook = processedWorkbook || await processExcelData(responses, false);
-      const fileName = `note_list_${new Date().toISOString().split('T')[0]}.xlsx`;
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], { 
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-      });
+  //     const workbook = processedWorkbook || await processExcelData(responses, false);
+  //     const fileName = `note_list_${new Date().toISOString().split('T')[0]}.xlsx`;
+  //     const buffer = await workbook.xlsx.writeBuffer();
+  //     const blob = new Blob([buffer], { 
+  //       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+  //     });
       
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
+  //     const a = document.createElement('a');
+  //     a.href = URL.createObjectURL(blob);
+  //     a.download = fileName;
+  //     document.body.appendChild(a);
+  //     a.click();
       
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
-      }, 0);
+  //     setTimeout(() => {
+  //       document.body.removeChild(a);
+  //       URL.revokeObjectURL(a.href);
+  //     }, 0);
 
-    } catch (error) {
-      console.error('导出失败:', error);
-      alert('导出失败: ' + error.message);
-    }
-  });
+  //   } catch (error) {
+  //     console.error('导出失败:', error);
+  //     alert('导出失败: ' + error.message);
+  //   }
+  // });
 
   // 打开设置页面
   settingsBtn.addEventListener('click', () => {
@@ -246,7 +246,10 @@ async function processExcelData(responses, needProcess = false) {
     { header: '评论量', key: 'comments', width: 15 },
     { header: '近30天Top10热点词', key: 'hotWords', width: 15 },
     { header: '关键词表达', key: 'keywords', width: 15 },
-    { header: '榜单类型', key: 'listType', width: 15 }
+    { header: '榜单类型', key: 'listType', width: 15 },
+    { header: '宝马MINI相关度', key: 'relevanceScore', width: 15 },
+    { header: '是否相关', key: 'isRelevant', width: 15 },
+    { header: '分析原因', key: 'reason', width: 30 }  // 添加 reason 列
   ];
   
   worksheet.columns = columns;
@@ -514,7 +517,7 @@ async function processExcelData(responses, needProcess = false) {
           
           const html = await response.text();
           
-          // 提取笔记描述
+          // 提取笔记描述和标签
           const descMatches = html.matchAll(/<span[^>]*class="note-text"[^>]*>.*?<span>(.*?)<\/span>.*?<\/span>/gs);
           const descTexts = Array.from(descMatches, match => match[1].trim());
           const desc = descTexts.join('').replace(/\s+/g, '');
@@ -523,13 +526,30 @@ async function processExcelData(responses, needProcess = false) {
           const tagMatches = html.matchAll(/<a[^>]*id="hash-tag"[^>]*>(.*?)<\/a>/g);
           const tags = Array.from(tagMatches, match => match[1]).join('、');
           
+          // 只有当成功获取到描述或标签时才进行AI分析
+          if (desc || tags) {
+            const aiAnalysisResult = await analyzeContent(desc, tags);
+            return {
+              desc: desc,
+              tags: tags || '',
+              isRelevant: aiAnalysisResult.isRelevant,
+              relevanceScore: aiAnalysisResult.score,
+              reason: aiAnalysisResult.reason  // 确保传递 reason
+            };
+          }
+          
+          // 如果没有获取到描述和标签，只返回基本信息
           return {
             desc: desc,
             tags: tags || ''
           };
+          
         } catch (error) {
           console.error('获取笔记详情失败:', error);
-          return { desc: '', tags: '' };
+          return { 
+            desc: '', 
+            tags: ''
+          };
         }
       }
       
@@ -546,8 +566,8 @@ async function processExcelData(responses, needProcess = false) {
               noteId: note.note_info.note_id,
               noteUrl: noteUrl,
               title: note.note_info.note_title || '',
-              desc: detail.desc,  // 使用获取到的描述
-              tags: detail.tags,  // 使用获取到的标签
+              desc: detail.desc,
+              tags: detail.tags,
               type: note.note_info.note_type === 1 ? '图文笔记' : '视频笔记',
               author: note.author_info.author_name,
               fans: note.author_info.fans_count,
@@ -558,10 +578,13 @@ async function processExcelData(responses, needProcess = false) {
               comments: note.comment || '0',
               hotWords: hotWords.join('、'),
               keywords: keywords.join('、'),
-              listType: listTypeName
+              listType: listTypeName,
+              isRelevant: detail.isRelevant ? '相关' : '不相关',  // 修改为文字显示
+              relevanceScore: detail.relevanceScore,
+              reason: detail.reason || ''  // 添加分析原因
             };
 
-            console.log(`正在处理笔记: ${baseData.noteId}, 描述长度: ${baseData.desc.length}, 标签数量: ${baseData.tags.split('、').length}`);
+            console.log(`正在处理笔记: ${baseData.noteId}, 描述长度: ${baseData.desc.length}, 标签数量: ${baseData.tags.split('、').length}, 相关性分数: ${baseData.relevanceScore}`);
             return baseData;
           } catch (error) {
             console.error('处理笔记失败:', error);
@@ -617,9 +640,107 @@ async function processExcelData(responses, needProcess = false) {
           pattern: 'solid',
           fgColor: { argb: 'FFE0E0E0' }
         };
+      } else {
+        // 获取当前行的数据
+        const isRelevant = row.getCell('isRelevant').value === '相关';
+        const relevanceScore = row.getCell('relevanceScore').value;
+        
+        // 如果与MINI不相关，添加灰色背景
+        if (!isRelevant || (relevanceScore && relevanceScore < 0.6)) {
+          row.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF0F0F0' } // 灰色背景
+          };
+          // 设置"不相关"文字为红色
+          row.getCell('isRelevant').font = {
+            name: 'Arial',
+            size: 11,
+            color: { argb: 'FFFF0000' }  // 红色文字
+          };
+        }
       }
     });
   }
 
   return workbook;
+} // 这里是processExcelData函数的结束括号
+
+// 添加AI分析函数
+async function analyzeContent(desc, tags) {
+  try {
+    const options = {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer sk-dpxngruqnxjukqdixlzhkfflihpmipqtvlxhdmogdcinpeeh',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: "Qwen/QwQ-32B",
+        messages: [
+          {
+            role: "user",
+            content: `分析内容是否与宝马MINI相关（车型、配置、使用体验、保养维护、改装等）。仅返回如下格式的JSON，reason限制50字内：{"isRelevant":布尔值,"relevanceScore":0到1的数值,"reason":"原因"}
+
+标签：${tags}
+描述：${desc}`
+          }
+        ],
+        stream: false,
+        max_tokens: 512,
+        temperature: 0.3,
+        top_p: 0.7,
+        top_k: 50,
+        frequency_penalty: 0.5,
+        n: 1,
+        response_format: {
+          type: "text"
+        }
+      })
+    };
+
+    const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', options);
+    const result = await response.json();
+    
+    try {
+      let content = result.choices[0].message.content.trim();
+      
+      // 尝试修复不完整的 JSON
+      if (content.startsWith('```json')) {
+        content = content.replace(/```json\s*/, '').replace(/```\s*$/, '');
+      }
+      
+      // 如果 JSON 不完整，尝试找到最后一个完整的大括号
+      if (!content.endsWith('}')) {
+        const lastBrace = content.lastIndexOf('}');
+        if (lastBrace !== -1) {
+          content = content.substring(0, lastBrace + 1);
+        }
+      }
+
+      console.log('处理后的 AI 响应:', content);
+      
+      const analysis = JSON.parse(content);
+      return {
+        isRelevant: analysis.isRelevant,
+        score: analysis.relevanceScore,
+        reason: analysis.reason || ''  // 添加 reason 到返回值
+      };
+    } catch (parseError) {
+      console.error('解析AI响应失败:', parseError);
+      console.log('AI原始响应:', result.choices[0].message.content);
+      return {
+        isRelevant: undefined,
+        score: undefined,
+        reason: ''
+      };
+    }
+  } catch (error) {
+    console.error('AI分析失败:', error);
+    return {
+      isRelevant: undefined,
+      score: undefined,
+      reason: ''
+    };
+  }
 }
