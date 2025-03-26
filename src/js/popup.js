@@ -410,7 +410,7 @@ async function processExcelData(responses, needProcess = false) {
         const noteTitle = row.getCell('title').value;
         
         // 标题包含二手或五菱宏光的行添加灰色背景
-        if (noteTitle && (noteTitle.includes('二手') || noteTitle.includes('五菱宏光'))) {
+        if (noteTitle && (noteTitle.includes('二手') || noteTitle.includes('五菱'))) {
           row.getCell('title').font = { 
             name: 'Arial', 
             size: 11, 
@@ -465,7 +465,7 @@ async function processExcelData(responses, needProcess = false) {
       // 3. 标题不同时包含"二手"和"五菱宏光"
       const isValid = isFirst && 
              types.size === 1 && 
-             !(noteTitle.includes('二手') || noteTitle.includes('五菱宏光'));
+             !(noteTitle.includes('二手') || noteTitle.includes('五菱'));
       
       if (isValid) {
         console.log('有效笔记:', {
