@@ -221,8 +221,18 @@ function formatTimestamp(timestamp) {
 
 // 处理Excel数据
 async function processExcelData(responses, needProcess = false) {
-  const { captureConfig = { noteDetailBatchSize: 5, noteDetailBatchDelay: 1000 } } = 
-    await chrome.storage.local.get('captureConfig');
+  // 修改默认配置的获取方式
+  const { captureConfig } = await chrome.storage.local.get('captureConfig');
+  const defaultConfig = {
+    noteDetailBatchSize: 5,
+    noteDetailBatchDelay: 2000  // 默认延迟2秒
+  };
+  
+  // 使用解构赋值并设置默认值
+  const { 
+    noteDetailBatchSize = defaultConfig.noteDetailBatchSize,
+    noteDetailBatchDelay = defaultConfig.noteDetailBatchDelay 
+  } = captureConfig || defaultConfig;
 
   // 创建工作簿和工作表
   const workbook = new ExcelJS.Workbook();
@@ -474,10 +484,12 @@ async function processExcelData(responses, needProcess = false) {
 
     // 确保批处理大小有效
     const effectiveBatchSize = Math.max(1, captureConfig.noteDetailBatchSize || 5);
-    // 在开始处理数据前显示进度容器
     const progressContainer = document.getElementById('progress-container');
     const progressText = progressContainer.querySelector('.progress-text');
     progressContainer.style.display = 'block';
+
+    // 声明收集所有有效结果的数组
+    let allValidResults = [];
 
     // 分批处理有效数据
     for (let i = 0; i < validNotes.length; i += effectiveBatchSize) {
@@ -594,30 +606,38 @@ async function processExcelData(responses, needProcess = false) {
       );
 
       // 添加这批数据到工作表
+      // 收集这批数据
       const validResults = batchResults.filter(Boolean);
+      allValidResults = allValidResults.concat(validResults);
       console.log(`当前批次成功处理 ${validResults.length} 条数据`);
-      
-      validResults.forEach(result => {
-        // 添加到有效数据表
-        validDataSheet.addRow(result);
-        
-        // 更新主工作表中对应的行
-        worksheet.eachRow((row, rowNumber) => {
-          if (rowNumber > 1 && row.getCell('noteId').value === result.noteId) {
-            row.getCell('desc').value = result.desc;
-            row.getCell('tags').value = result.tags;
-          }
-        });
-        
-        console.log(`成功添加笔记: ${result.noteId}`);
-      });
 
-      // 修复这里：使用 effectiveBatchSize 替代 batchSize
       if (i + effectiveBatchSize < validNotes.length) {
-        console.log(`等待 ${batchDelay}ms 后处理下一批数据...`);
-        await new Promise(resolve => setTimeout(resolve, batchDelay));
+        console.log(`等待 ${noteDetailBatchDelay}ms 后处理下一批数据...`);
+        await new Promise(resolve => setTimeout(resolve, noteDetailBatchDelay));
       }
     }
+
+    // 所有数据收集完成后，进行整体排序
+    allValidResults.sort((a, b) => {
+      const scoreA = a.relevanceScore || 0;
+      const scoreB = b.relevanceScore || 0;
+      return scoreB - scoreA;  // 降序排序
+    });
+
+    // 将排序后的数据添加到表格
+    allValidResults.forEach(result => {
+      validDataSheet.addRow(result);
+      
+      // 更新主工作表中对应的行
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1 && row.getCell('noteId').value === result.noteId) {
+          row.getCell('desc').value = result.desc;
+          row.getCell('tags').value = result.tags;
+        }
+      });
+      
+      console.log(`成功添加笔记: ${result.noteId}`);
+    });
 
     // 设置有效数据表样式
     validDataSheet.eachRow((row, rowNumber) => {
@@ -665,82 +685,3 @@ async function processExcelData(responses, needProcess = false) {
 
   return workbook;
 } // 这里是processExcelData函数的结束括号
-
-// 添加AI分析函数
-async function analyzeContent(desc, tags) {
-  try {
-    const options = {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer sk-dpxngruqnxjukqdixlzhkfflihpmipqtvlxhdmogdcinpeeh',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: "Qwen/QwQ-32B",
-        messages: [
-          {
-            role: "user",
-            content: `分析内容是否与宝马MINI相关（车型、配置、使用体验、保养维护、改装等）。仅返回如下格式的JSON，reason限制50字内：{"isRelevant":布尔值,"relevanceScore":0到1的数值,"reason":"原因"}
-
-标签：${tags}
-描述：${desc}`
-          }
-        ],
-        stream: false,
-        max_tokens: 512,
-        temperature: 0.3,
-        top_p: 0.7,
-        top_k: 50,
-        frequency_penalty: 0.5,
-        n: 1,
-        response_format: {
-          type: "text"
-        }
-      })
-    };
-
-    const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', options);
-    const result = await response.json();
-    
-    try {
-      let content = result.choices[0].message.content.trim();
-      
-      // 尝试修复不完整的 JSON
-      if (content.startsWith('```json')) {
-        content = content.replace(/```json\s*/, '').replace(/```\s*$/, '');
-      }
-      
-      // 如果 JSON 不完整，尝试找到最后一个完整的大括号
-      if (!content.endsWith('}')) {
-        const lastBrace = content.lastIndexOf('}');
-        if (lastBrace !== -1) {
-          content = content.substring(0, lastBrace + 1);
-        }
-      }
-
-      console.log('处理后的 AI 响应:', content);
-      
-      const analysis = JSON.parse(content);
-      return {
-        isRelevant: analysis.isRelevant,
-        score: analysis.relevanceScore,
-        reason: analysis.reason || ''  // 添加 reason 到返回值
-      };
-    } catch (parseError) {
-      console.error('解析AI响应失败:', parseError);
-      console.log('AI原始响应:', result.choices[0].message.content);
-      return {
-        isRelevant: undefined,
-        score: undefined,
-        reason: ''
-      };
-    }
-  } catch (error) {
-    console.error('AI分析失败:', error);
-    return {
-      isRelevant: undefined,
-      score: undefined,
-      reason: ''
-    };
-  }
-}
