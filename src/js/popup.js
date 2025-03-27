@@ -707,20 +707,25 @@ async function processExcelData(responses, needProcess = false) {
         // 获取当前行的数据
         const isRelevant = row.getCell('isRelevant').value === '相关';
         const relevanceScore = row.getCell('relevanceScore').value;
+        const projectName = row.getCell('projectName').value;
         
-        // 如果与MINI不相关，添加灰色背景
-        if (!isRelevant || (relevanceScore && relevanceScore < 0.6)) {
+        // 如果与MINI不相关或者有项目名称（不为"无"），添加灰色背景和红色文字
+        if (!isRelevant || (projectName && projectName !== '无')) {
+          // 添加灰色背景
           row.fill = {
             type: 'pattern',
             pattern: 'solid',
-            fgColor: { argb: 'FFF0F0F0' } // 灰色背景
+            fgColor: { argb: 'FFF0F0F0' }
           };
-          // 设置"不相关"文字为红色
-          row.getCell('isRelevant').font = {
-            name: 'Arial',
-            size: 11,
-            color: { argb: 'FFFF0000' }  // 红色文字
-          };
+          
+          // 设置相关单元格为红色文字
+          ['isRelevant', 'projectName'].forEach(cellKey => {
+            row.getCell(cellKey).font = {
+              name: 'Arial',
+              size: 11,
+              color: { argb: 'FFFF0000' }
+            };
+          });
         }
       }
     });
