@@ -502,3 +502,70 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;  // 保持消息通道开启
   }
 });
+
+// 添加获取项目信息的函数
+async function fetchProjectInfo(noteId, tab) {
+  try {
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: async (noteId) => {
+        // 计算近七天的时间范围
+        const now = new Date();
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        const start = new Date(end);
+        start.setDate(start.getDate() - 7);
+        start.setHours(0, 0, 0, 0);
+
+        const response = await fetch('https://ad.xiaohongshu.com/api/leona/ugc_heat/report/list', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'content-type': 'application/json;charset=UTF-8',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          },
+          body: JSON.stringify({
+            noteId: noteId,
+            pageNum: 1,
+            pageSize: 10,
+            projectCreateTimeBegin: start.getTime(),
+            projectCreateTimeEnd: end.getTime(),
+            projectId: "",
+            projectName: "",
+            reportType: "PROJECT"
+          }),
+          credentials: 'include'
+        });
+
+        if (!response.ok) {
+          throw new Error(`请求失败: ${response.status}`);
+        }
+
+        return await response.json();
+      },
+      args: [noteId]
+    });
+
+    return result[0].result;
+  } catch (error) {
+    console.error('获取项目信息失败:', error);
+    throw error;
+  }
+}
+
+// 在现有的消息监听器中添加新的处理
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'fetchNoteDetail') {
+    fetchNoteDetail(message.noteInfo)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  
+  if (message.type === 'fetchProjectInfo') {
+    fetchProjectInfo(message.noteId, message.tab)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+});

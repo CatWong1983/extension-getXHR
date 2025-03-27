@@ -240,6 +240,7 @@ async function processExcelData(responses, needProcess = false) {
   const validDataSheet = workbook.addWorksheet('有效数据');
 
   // 设置列
+  // 修改列定义
   const columns = [
     { header: '笔记ID', key: 'noteId', width: 28 },
     { header: '笔记链接', key: 'noteUrl', width: 28 },
@@ -259,7 +260,8 @@ async function processExcelData(responses, needProcess = false) {
     { header: '榜单类型', key: 'listType', width: 15 },
     { header: '宝马MINI相关度', key: 'relevanceScore', width: 15 },
     { header: '是否相关', key: 'isRelevant', width: 15 },
-    { header: '分析原因', key: 'reason', width: 30 }  // 添加 reason 列
+    { header: '分析原因', key: 'reason', width: 30 },
+    { header: '已投流项目名称', key: 'projectName', width: 30 }  // 添加项目名称列
   ];
   
   worksheet.columns = columns;
@@ -310,24 +312,28 @@ async function processExcelData(responses, needProcess = false) {
               responseIndex  // 添加响应索引
             });
           } else {
-            worksheet.addRow({
-              noteId: note.note_info.note_id,
-              noteUrl: `https://www.xiaohongshu.com/explore/${noteId}?xsec_token=${note.note_info.xsec_token}&xsec_source=pc_ad`,
-              title: note.note_info.note_title || '',
-              desc: '',
-              tags: '',
-              type: note.note_info.note_type === 1 ? '图文笔记' : '视频笔记',
-              author: note.author_info.author_name,
-              fans: note.author_info.fans_count,
-              date: formatTimestamp(note.note_create_time),
-              status: note.note_status === 1 ? '公开' : note.note_status,
-              heat: note.heat_value || '0',
-              likes: note.interact || '0',
-              comments: note.comment || '0',
-              hotWords: hotWords.join('、'),
-              keywords: keywords.join('、'),
-              listType: listType === 1 ? '热度榜' : listType === 2 ? '黑马榜' : '未知'
-            });
+            // 修改非处理模式下的数据添加
+            if (!needProcess) {
+              worksheet.addRow({
+                noteId: note.note_info.note_id,
+                noteUrl: `https://www.xiaohongshu.com/explore/${noteId}?xsec_token=${note.note_info.xsec_token}&xsec_source=pc_ad`,
+                title: note.note_info.note_title || '',
+                desc: '',
+                tags: '',
+                type: note.note_info.note_type === 1 ? '图文笔记' : '视频笔记',
+                author: note.author_info.author_name,
+                fans: note.author_info.fans_count,
+                date: formatTimestamp(note.note_create_time),
+                status: note.note_status === 1 ? '公开' : note.note_status,
+                heat: note.heat_value || '0',
+                likes: note.interact || '0',
+                comments: note.comment || '0',
+                hotWords: hotWords.join('、'),
+                keywords: keywords.join('、'),
+                listType: listType === 1 ? '热度榜' : listType === 2 ? '黑马榜' : '未知',
+                projectName: ''  
+              });
+            }
           }
         });
       }
@@ -409,7 +415,7 @@ async function processExcelData(responses, needProcess = false) {
         const noteId = row.getCell('noteId').value;
         const noteTitle = row.getCell('title').value;
         
-        // 标题包含二手或五菱宏光的行添加灰色背景
+        // 标题包含二手或五菱的行添加灰色背景
         if (noteTitle && (noteTitle.includes('二手') || noteTitle.includes('五菱'))) {
           row.getCell('title').font = { 
             name: 'Arial', 
@@ -454,32 +460,68 @@ async function processExcelData(responses, needProcess = false) {
     // 添加有效数据到第二个表
     const batchDelay = captureConfig.noteDetailBatchDelay;
     // 修改有效数据筛选逻辑
-    const validNotes = allNotes.filter(({note, listType, isFirst, responseIndex}) => {
-      const noteId = note.note_info.note_id;
-      const noteTitle = note.note_info.note_title || '';
-      const types = noteListTypes.get(noteId);
-      
-      // 检查条件：
-      // 1. 是该类型榜单中的第一次出现
-      // 2. 不是跨榜单出现的笔记（types.size === 1）
-      // 3. 标题不同时包含"二手"和"五菱宏光"
-      const isValid = isFirst && 
-             types.size === 1 && 
-             !(noteTitle.includes('二手') || noteTitle.includes('五菱'));
-      
-      if (isValid) {
-        console.log('有效笔记:', {
-          noteId,
-          title: noteTitle,
-          listType,
-          isFirst,
-          typesSize: types.size
+    // 添加获取项目信息的函数
+    async function getProjectName(noteId) {
+      let projectName = '无';  // 默认值改为"无"
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        console.log(`开始获取笔记 ${noteId} 的项目信息...`);
+        
+        const projectResult = await chrome.runtime.sendMessage({
+          type: 'fetchProjectInfo',
+          noteId: noteId,
+          tab: tab
         });
+        
+        console.log('项目信息接口返回:', projectResult);
+        
+        if (projectResult.success && projectResult.data.data && 
+            projectResult.data.data.list && projectResult.data.data.list.length > 0) {
+          projectName = projectResult.data.data.list
+            .map(item => item.projectInfo.projectName)
+            .join('、');
+        }
+      } catch (error) {
+        console.error('获取项目信息失败:', error);
       }
-      
-      return isValid;
-    });
-
+      return projectName;
+    }
+    
+    // 修改有效数据筛选逻辑
+    const validNotesWithProjects = await Promise.all(
+      allNotes.map(async ({note, listType, isFirst, hotWords, keywords}) => {
+        const noteId = note.note_info.note_id;
+        const noteTitle = note.note_info.note_title || '';
+        const types = noteListTypes.get(noteId);
+        
+        const projectName = await getProjectName(noteId);
+        
+        // 修改筛选条件：
+        // 1. 标题不包含"二手"和"五菱"
+        // 2. 如果只出现在一个榜单，直接使用
+        // 3. 如果同时出现在两个榜单且项目名称为"无"，则取热度榜的数据
+        const isValid = !(noteTitle.includes('二手') || noteTitle.includes('五菱')) && 
+               ((types.size === 1) || 
+                (types.size > 1 && listType === 1 && isFirst && projectName === '无'));
+        
+        if (isValid) {
+          console.log('有效笔记:', {
+            noteId,
+            title: noteTitle,
+            listType,
+            isFirst,
+            typesSize: types.size,
+            inMultipleLists: types.size > 1,
+            hasProject: projectName
+          });
+          return {note, listType, isFirst, hotWords, keywords, projectName};  // 返回完整的数据
+        }
+        return null;
+      })
+    );
+    
+    const validNotes = validNotesWithProjects.filter(Boolean);
+    
     console.log('筛选出的有效数据数量:', validNotes.length);
 
     // 确保批处理大小有效
@@ -567,7 +609,7 @@ async function processExcelData(responses, needProcess = false) {
       
       // 在处理批次数据时修改调用方式
       const batchResults = await Promise.all(
-        batch.map(async ({note, listTypeName, hotWords, keywords}) => {
+        batch.map(async ({note, listTypeName, hotWords, keywords, projectName}) => {
           try {
             const noteUrl = `https://www.xiaohongshu.com/explore/${note.note_info.note_id}?xsec_token=${note.note_info.xsec_token}&xsec_source=pc_ad`;
             
@@ -591,9 +633,10 @@ async function processExcelData(responses, needProcess = false) {
               hotWords: hotWords.join('、'),
               keywords: keywords.join('、'),
               listType: listTypeName,
-              isRelevant: detail.isRelevant ? '相关' : '不相关',  // 修改为文字显示
+              isRelevant: detail.isRelevant ? '相关' : '不相关',
               relevanceScore: detail.relevanceScore,
-              reason: detail.reason || ''  // 添加分析原因
+              reason: detail.reason || '',
+              projectName: projectName  // 项目名称会在外层处理
             };
 
             console.log(`正在处理笔记: ${baseData.noteId}, 描述长度: ${baseData.desc.length}, 标签数量: ${baseData.tags.split('、').length}, 相关性分数: ${baseData.relevanceScore}`);
