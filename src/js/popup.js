@@ -261,7 +261,11 @@ async function processExcelData(responses, needProcess = false) {
     { header: '宝马MINI相关度', key: 'relevanceScore', width: 15 },
     { header: '是否相关', key: 'isRelevant', width: 15 },
     { header: '分析原因', key: 'reason', width: 30 },
-    { header: '已投流项目名称', key: 'projectName', width: 30 }  // 添加项目名称列
+    { header: '已投流项目名称', key: 'projectName', width: 30 },
+    { header: '评论总数', key: 'commentCount', width: 15 },
+    { header: '相关评论', key: 'relevantComments', width: 40 },
+    { header: '评论相关度', key: 'commentScores', width: 15 },
+    { header: '评论分析原因', key: 'commentReasons', width: 30 }
   ];
   
   worksheet.columns = columns;
@@ -464,7 +468,11 @@ async function processExcelData(responses, needProcess = false) {
     async function getProjectName(noteId) {
       let projectName = '无';  // 默认值改为"无"
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        // const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const [tab] = await chrome.tabs.query({ 
+          url: "https://ad.xiaohongshu.com/microapp/kbt/*",
+          status: "complete"
+        });
         console.log(`开始获取笔记 ${noteId} 的项目信息...`);
         
         const projectResult = await chrome.runtime.sendMessage({
@@ -607,7 +615,8 @@ async function processExcelData(responses, needProcess = false) {
         }
       }
       
-      // 在处理批次数据时修改调用方式
+      // 在 batchResults 的处理部分进行修改
+      // 在处理批次数据时修改评论相关度的处理逻辑
       const batchResults = await Promise.all(
         batch.map(async ({note, listTypeName, hotWords, keywords, projectName}) => {
           try {
@@ -636,10 +645,66 @@ async function processExcelData(responses, needProcess = false) {
               isRelevant: detail.isRelevant ? '相关' : '不相关',
               relevanceScore: detail.relevanceScore,
               reason: detail.reason || '',
-              projectName: projectName  // 项目名称会在外层处理
+              projectName: projectName,
+              commentCount: 0,
+              relevantComments: '',
+              commentScores: '0',  // 默认设置为"0"
+              commentReasons: ''
             };
+      
+            // 只对相关且没有项目的笔记进行评论分析
+            if (detail.isRelevant && projectName === '无'&& parseInt(note.comment) > 0) {
+              console.log(`开始获取评论: ${note.note_info.note_id}`);
+              
+              // 获取当前标签页
+              // const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+              const [tab] = await chrome.tabs.query({
+                url: "https://www.xiaohongshu.com/*",
+                status: "complete"
+              });
 
-            console.log(`正在处理笔记: ${baseData.noteId}, 描述长度: ${baseData.desc.length}, 标签数量: ${baseData.tags.split('、').length}, 相关性分数: ${baseData.relevanceScore}`);
+              if (!tab) {
+                console.error('未找到小红书标签页');
+                alert('请先打开小红书网页后再试 https://www.xiaohongshu.com/');  // 添加弹窗提醒
+                return baseData;
+              }
+              
+              // 通过 background.js 获取评论
+              console.log(`开始获取评论数据，笔记ID: ${note.note_info.note_id}`);
+              const commentResponse = await chrome.runtime.sendMessage({
+                type: 'fetchComments',
+                noteId: note.note_info.note_id,
+                xsecToken: note.note_info.xsec_token,
+                tab: tab
+              });
+              console.log('获取到的评论数据:', commentResponse);
+      
+              if (commentResponse.success) {
+                // 分析评论
+                console.log(`正在分析评论: ${note.note_info.note_id}`);
+                const analysisResults = await window.analyzeComments(commentResponse.data);
+                
+                // 由于现在 analyzeComments 返回的是整体分析结果
+                if (analysisResults.length > 0) {
+                  const result = analysisResults[0]; // 获取整体分析结果
+                  
+                  // 添加评论分析结果
+                  baseData.commentCount = result.commentCount;
+                  baseData.relevantComments = result.content;
+                  baseData.commentScores = result.analysis.score;
+                  baseData.commentReasons = result.analysis.reason;
+                  
+                  console.log(`正在处理笔记: ${baseData.noteId}, 描述长度: ${baseData.desc.length}, 
+                    标签数量: ${baseData.tags.split('、').length}, 相关性分数: ${baseData.relevanceScore}, 
+                    评论数量: ${baseData.commentCount}`);
+                }
+              } else {
+                console.error(`获取评论失败: ${commentResponse.message}`);
+              }
+            } else {
+              console.log(`跳过评论分析: ${note.note_info.note_id}`);
+            }
+      
             return baseData;
           } catch (error) {
             console.error('处理笔记失败:', error);
