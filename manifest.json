@@ -9,12 +9,24 @@
     "notifications",
     "scripting",
     "activeTab",
-    "cookies"
+    "cookies",
+    "notifications",
+    "downloads"
   ],
   "background": {
     "service_worker": "src/js/background.js",
     "type": "module"
   },
+  "web_accessible_resources": [{
+    "resources": [
+      "src/lib/exceljs.min.js",
+      "src/lib/xlsx.full.min.js",
+      "src/lib/crypto-js.min.js",
+      "src/js/utils/signature.js",
+      "src/js/utils/aiAnalyzer.js"
+    ],
+    "matches": ["<all_urls>"]
+  }],
   "host_permissions": [
     "*://*/*"
   ],

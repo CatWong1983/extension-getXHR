@@ -183,10 +183,11 @@ input:checked + .slider:before {
 }
 
 .progress-text {
-  margin: 10px 0;
+  word-wrap: break-word;
+  white-space: normal;
   padding: 10px;
-  background-color: #f5f5f5;
-  border-radius: 4px;
-  text-align: center;
-  color: #333;
+  max-width: 100%;
+  overflow-x: hidden;
+  user-select: text;
+  cursor: text;
 }
