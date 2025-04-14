@@ -4,7 +4,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const clearBtn = document.getElementById('clearBtn');
   // const exportBtn = document.getElementById('exportBtn');
   const processDataBtn = document.getElementById('processDataBtn');
-  // const exportExcelBtn = document.getElementById('exportExcelBtn');
+  const exportExcelBtn = document.getElementById('exportExcelBtn');
   const settingsBtn = document.getElementById('settingsBtn');
 
   // 用于存储处理后的数据
@@ -107,8 +107,118 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  // 分析JSON数据结构并提取所有可能的字段
+  function analyzeJsonStructure(data, prefix = '', fields = new Set()) {
+    if (Array.isArray(data)) {
+      if (data.length > 0) {
+        // 如果是数组，添加带[]的字段
+        fields.add(`${prefix}[]`);
+        // 分析数组中的第一个元素
+        data.forEach((item, index) => {
+          analyzeJsonStructure(item, `${prefix}[]`, fields);
+        });
+      }
+    } else if (data && typeof data === 'object') {
+      Object.entries(data).forEach(([key, value]) => {
+        const newPrefix = prefix ? `${prefix}.${key}` : key;
+        if (Array.isArray(value)) {
+          fields.add(`${newPrefix}[]`);
+          if (value.length > 0) {
+            value.forEach((item, index) => {
+              analyzeJsonStructure(item, `${newPrefix}[]`, fields);
+            });
+          }
+        } else if (value && typeof value === 'object') {
+          analyzeJsonStructure(value, newPrefix, fields);
+        } else {
+          fields.add(newPrefix);
+        }
+      });
+    }
+    return Array.from(fields);
+  }
+
+  function getFieldValue(data, field) {
+    try {
+      if (field.includes('[]')) {
+        // 处理数组路径
+        const [arrayPath, ...subPath] = field.split('[].');
+        let array = arrayPath ? 
+          arrayPath.split('.').reduce((obj, key) => obj?.[key], data) : 
+          data;
+  
+        if (!Array.isArray(array)) {
+          return '';
+        }
+  
+        // 如果有子路径，获取每个数组元素的对应字段
+        if (subPath.length > 0) {
+          return array.map(item => {
+            const value = subPath.join('.').split('.').reduce((obj, key) => obj?.[key], item);
+            return value === null || value === undefined ? '' : String(value);
+          }).join('、');
+        }
+        
+        // 如果没有子路径，返回整个数组的字符串形式
+        return array.map(item => JSON.stringify(item)).join('、');
+      }
+  
+      // 处理普通字段
+      const value = field.split('.').reduce((obj, key) => obj?.[key], data);
+      if (value === null || value === undefined) {
+        return '';
+      }
+      if (Array.isArray(value)) {
+        return value.map(String).join('、');
+      }
+      if (typeof value === 'object') {
+        return JSON.stringify(value);
+      }
+      return String(value);
+    } catch (error) {
+      console.error('获取字段值失败:', field, error);
+      return '';
+    }
+  }
+
   // 导出Excel
-  // exportExcelBtn.addEventListener('click', async () => {
+  exportExcelBtn.addEventListener('click', async () => {
+    const { responses = [] } = await chrome.storage.local.get('responses');
+    if (responses.length === 0) {
+      alert('没有可处理的数据！');
+      return;
+    }
+    const fieldSelector = document.getElementById('field-selector');
+    const fieldList = document.getElementById('fieldList');
+    fieldList.innerHTML = '';
+
+    // 分析所有响应数据的结构
+    const allFields = new Set();
+    responses.forEach(response => {
+      try {
+        const data = JSON.parse(response.responseBody);
+        const fields = analyzeJsonStructure(data);
+        fields.forEach(field => allFields.add(field));
+      } catch (error) {
+        console.error('解析响应数据失败:', error);
+      }
+    });
+
+    // 创建字段选择列表
+    Array.from(allFields).sort().forEach(field => {
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = field;
+      checkbox.checked = true;
+      label.appendChild(checkbox);
+      label.appendChild(document.createTextNode(field));
+      fieldList.appendChild(label);
+    });
+
+    fieldSelector.style.display = 'block';
+
+
   //   try {
   //     const { responses = [] } = await chrome.storage.local.get('responses');
   //     if (responses.length === 0) {
@@ -138,15 +248,133 @@ document.addEventListener('DOMContentLoaded', async () => {
   //     console.error('导出失败:', error);
   //     alert('导出失败: ' + error.message);
   //   }
-  // });
+  });
 
-  // 打开设置页面
+  // // 打开设置页面
   settingsBtn.addEventListener('click', () => {
     if (chrome.runtime.openOptionsPage) {
       chrome.runtime.openOptionsPage();
     } else {
       window.open(chrome.runtime.getURL('src/html/options.html'));
     }
+  });
+  
+    // 全选按钮
+  document.getElementById('selectAllFields').addEventListener('click', () => {
+    document.querySelectorAll('#fieldList input[type="checkbox"]').forEach(checkbox => {
+      checkbox.checked = true;
+    });
+  });
+
+  // 取消全选按钮
+  document.getElementById('deselectAllFields').addEventListener('click', () => {
+    document.querySelectorAll('#fieldList input[type="checkbox"]').forEach(checkbox => {
+      checkbox.checked = false;
+    });
+  });
+
+  // 确认导出按钮
+  document.getElementById('confirmExport').addEventListener('click', async () => {
+    const selectedFields = Array.from(document.querySelectorAll('#fieldList input:checked')).map(input => input.value);
+    if (selectedFields.length === 0) {
+      alert('请至少选择一个字段！');
+      return;
+    }
+
+    const { responses = [] } = await chrome.storage.local.get('responses');
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('数据');
+
+    // 设置表头
+    worksheet.columns = selectedFields.map(field => ({
+      header: field.replace('[]', ''),
+      key: field,
+      width: 30
+    }));
+
+    // 添加数据
+    responses.forEach(response => {
+      try {
+        const data = JSON.parse(response.responseBody);
+        
+        // 找到包含数组的字段
+        const arrayFields = selectedFields.filter(field => field.includes('[]'));
+        const normalFields = selectedFields.filter(field => !field.includes('[]'));
+        
+        if (arrayFields.length > 0) {
+          // 获取所有数组字段的数据
+          const arrayData = arrayFields.map(field => {
+            const [arrayPath, ...subPath] = field.split('[].');
+            const array = arrayPath ? 
+              arrayPath.split('.').reduce((obj, key) => obj?.[key], data) : 
+              data;
+            return Array.isArray(array) ? array : [];
+          });
+  
+          // 获取最长的数组长度
+          const maxLength = Math.max(...arrayData.map(arr => arr.length));
+  
+          // 为每个数组元素创建一行
+          for (let i = 0; i < maxLength; i++) {
+            const row = {};
+            
+            // 处理普通字段
+            normalFields.forEach(field => {
+              row[field] = getFieldValue(data, field);
+            });
+            
+            // 处理数组字段
+            arrayFields.forEach((field, fieldIndex) => {
+              const [arrayPath, ...subPath] = field.split('[].');
+              const array = arrayData[fieldIndex];
+              
+              if (array[i]) {
+                if (subPath.length > 0) {
+                  row[field] = subPath.join('.').split('.').reduce((obj, key) => {
+                    const value = obj?.[key];
+                    return value === null || value === undefined ? '' : value;
+                  }, array[i]);
+                } else {
+                  row[field] = array[i];
+                }
+              } else {
+                row[field] = '';
+              }
+            });
+            
+            worksheet.addRow(row);
+          }
+        } else {
+          // 如果没有数组字段，就添加一行
+          const row = {};
+          selectedFields.forEach(field => {
+            row[field] = getFieldValue(data, field);
+          });
+          worksheet.addRow(row);
+        }
+      } catch (error) {
+        console.error('处理数据行失败:', error);
+      }
+    });
+
+    // 导出文件
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { 
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+    });
+    
+    const a = document.createElement('a');
+    const fileName = `data_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+    a.href = URL.createObjectURL(blob);
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+      document.getElementById('field-selector').style.display = 'none';
+    }, 100);
   });
 
   // 监听存储变化，实时更新列表

@@ -21,8 +21,18 @@
     <div class="button-group">
       <button id="clearBtn">清除数据</button>
       <!-- <button id="exportBtn">导出JSON</button> -->
-      <button id="processDataBtn">导出Excel</button>
-      <!-- <button id="exportExcelBtn">导出Excel</button> -->
+      <button id="processDataBtn">宝马mini导出</button>
+      <button id="exportExcelBtn">直接导出</button>
+    </div>
+
+    <div id="field-selector" class="field-selector" style="display: none;">
+      <h3>选择要导出的字段</h3>
+      <div class="field-list" id="fieldList"></div>
+      <div class="button-group">
+        <button id="selectAllFields">全选</button>
+        <button id="deselectAllFields">取消全选</button>
+        <button id="confirmExport">确认导出</button>
+      </div>
     </div>
 
     <div id="requestContainer" class="request-list"></div>

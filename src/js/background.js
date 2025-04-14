@@ -4,7 +4,7 @@ import '../lib/exceljs.min.js'
 let isCapturing = false;
 let currentRequestId = null;
 let captureConfig = {
-  urlPatterns: ['https://ad.xiaohongshu.com/api/galaxy/kol/note/list'],
+  urlPatterns: ['https://ad.xiaohongshu.com/api/edith/ugc_heat/note_list'],
   requestTypes: ['xmlhttprequest'],
   httpMethods: ['POST'],
   maxCaptures: 100
@@ -104,9 +104,11 @@ async function handleRequest(details) {
     isCapturing = true;
     
     console.log('检测到请求:', details.url);
+    console.log('请求体:', details);
     
     // 解析原始请求体
     let originalBody = null;
+    
     if (details.requestBody && details.requestBody.raw) {
       const rawData = new Uint8Array(details.requestBody.raw[0].bytes);
       const decoder = new TextDecoder('utf-8');
