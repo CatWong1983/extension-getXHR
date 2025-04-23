@@ -678,19 +678,27 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
       });
 
-      // const url = URL.createObjectURL(blob);
-      // console.log('URL生成完成',url);
-
-      const base64Data = btoa(String.fromCharCode.apply(null, new Uint8Array(buffer)));
-      const dataUrl = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64Data}`;
-
-      // 使用 chrome.downloads API 下载
-      await chrome.downloads.download({
-        url: dataUrl,
-        filename: fileName,
-        saveAs: true
-      });
-      // URL.revokeObjectURL(url);
+      // 转换为 base64
+      const reader = new FileReader();
+      
+      reader.onload = async function(e) {
+        try {
+          await chrome.downloads.download({
+            url: e.target.result,
+            filename: fileName,
+            saveAs: true
+          });
+          sendResponse({ success: true });
+        } catch (error) {
+          console.error("Download failed:", error);
+          sendResponse({ success: false, error: error.message });
+        }
+      };
+      reader.onerror = function(error) {
+        console.error("FileReader failed:", error);
+        sendResponse({ success: false, error: error.message });
+      };
+      reader.readAsDataURL(blob);
       sendResponse({ success: true });
     }
     catch (error) {
@@ -1179,38 +1187,38 @@ async function processExcelData(responses, needProcess = false) {
               };
               console.log('笔记基本数据:', baseData);
               // 只对相关且没有项目的笔记进行评论分析
-              if (detail.isRelevant && projectName === '无' && parseInt(note.comment) > 0) {
-                console.log(`开始获取评论: ${note.note_info.note_id}`);
+              // if (detail.isRelevant && projectName === '无' && parseInt(note.comment) > 0) {
+              //   console.log(`开始获取评论: ${note.note_info.note_id}`);
 
                 // 通过 background.js 获取评论
-                console.log(`开始获取评论数据，笔记ID: ${note.note_info.note_id}`);
-                const commentResponse = await fetchAllComments(note.note_info.note_id, note.note_info.xsec_token, tab);
+                // console.log(`开始获取评论数据，笔记ID: ${note.note_info.note_id}`);
+                // const commentResponse = await fetchAllComments(note.note_info.note_id, note.note_info.xsec_token, tab);
                 
-                console.log('获取到的评论数据:', note.note_info.note_id, commentResponse);
+                // console.log('获取到的评论数据:', note.note_info.note_id, commentResponse);
         
-                if (commentResponse.length > 0) {
-                  // 分析评论
-                  console.log(`正在分析评论: ${note.note_info.note_id}`);
-                  // 由于现在 analyzeComments 返回的是整体分析结果
+                // if (commentResponse.length > 0) {
+                //   // 分析评论
+                //   console.log(`正在分析评论: ${note.note_info.note_id}`);
+                //   // 由于现在 analyzeComments 返回的是整体分析结果
                   
-                  const result = await analyzeComments(commentResponse); // 获取整体分析结果
-                  console.log('评论分析结果:', note.note_info.note_id,result);
-                  // 添加评论分析结果
-                  baseData.commentCount = result.commentCount;
-                  baseData.relevantComments = result.content;
-                  baseData.commentScores = result.analysis.score;
-                  baseData.commentReasons = result.analysis.reason;
+                //   const result = await analyzeComments(commentResponse); // 获取整体分析结果
+                //   console.log('评论分析结果:', note.note_info.note_id,result);
+                //   // 添加评论分析结果
+                //   baseData.commentCount = result.commentCount;
+                //   baseData.relevantComments = result.content;
+                //   baseData.commentScores = result.analysis.score;
+                //   baseData.commentReasons = result.analysis.reason;
                     
-                  console.log(`正在处理笔记: ${baseData.noteId}, 描述长度: ${baseData.desc.length}, 
-                      标签数量: ${baseData.tags.split('、').length}, 相关性分数: ${baseData.relevanceScore}, 
-                      评论数量: ${baseData.commentCount}`);
+                //   console.log(`正在处理笔记: ${baseData.noteId}, 描述长度: ${baseData.desc.length}, 
+                //       标签数量: ${baseData.tags.split('、').length}, 相关性分数: ${baseData.relevanceScore}, 
+                //       评论数量: ${baseData.commentCount}`);
                   
-                } else {
-                  console.error(`获取评论失败: ${commentResponse}, ${note.note_info.note_id}`);
-                }
-              } else {
-                console.log(`跳过评论分析: ${note.note_info.note_id}`);
-              }
+                // } else {
+                //   console.error(`获取评论失败: ${commentResponse}, ${note.note_info.note_id}`);
+                // }
+              // } else {
+              //   console.log(`跳过评论分析: ${note.note_info.note_id}`);
+              // }
         
               return baseData;
             } catch (error) {
