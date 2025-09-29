@@ -6,6 +6,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const processDataBtn = document.getElementById('processDataBtn');
   const exportExcelBtn = document.getElementById('exportExcelBtn');
   const settingsBtn = document.getElementById('settingsBtn');
+  const ideaToggle = document.getElementById('ideaToggle');
+  const ideaExportBtn = document.getElementById('ideaExportBtn');
 
   // 用于存储处理后的数据
   let processedWorkbook = null;
@@ -13,6 +15,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 初始化开关状态
   const { isCapturing = false } = await chrome.storage.local.get('isCapturing');
   captureToggle.checked = isCapturing;
+
+  // 初始化灵犀开关状态
+  const { isIdeaCapturing = false } = await chrome.storage.local.get('isIdeaCapturing');
+  ideaToggle.checked = isIdeaCapturing;
 
   // 加载并显示已捕获的请求
   await loadRequests();
@@ -80,28 +86,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
       }
 
-      console.log('开始处理数据:', responses.length, '条');
-
       const progressContainer = document.getElementById('progress-container');
       const progressText = progressContainer.querySelector('.progress-text');
       progressContainer.style.display = 'block';
       progressText.textContent = '正在处理数据...';
 
-      
-      // 直接发送处理和下载请求
-      const result = chrome.runtime.sendMessage({
+      const result = await chrome.runtime.sendMessage({
         type: 'processAndDownloadExcel',
         responses: responses,
         needProcess: true
       });
 
-      console.log('发送处理请求:', result);
-      // 发送消息到后台脚本
+      console.log('数据处理结果:', result);
     } catch (error) {
       console.error('处理数据失败:', error);
       alert('处理数据失败: ' + error.message);
     } finally {
-      // 隐藏进度容器
       const progressContainer = document.getElementById('progress-container');
       progressContainer.style.display = 'none';
     }
@@ -188,13 +188,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       alert('没有可处理的数据！');
       return;
     }
+
+    // 过滤掉灵犀平台的数据
+    const xhsResponses = responses.filter(r => !r.url.includes('idea.xiaohongshu.com'));
+    if (xhsResponses.length === 0) {
+      alert('没有可处理的小红书数据！');
+      return;
+    }
+
     const fieldSelector = document.getElementById('field-selector');
     const fieldList = document.getElementById('fieldList');
     fieldList.innerHTML = '';
 
     // 分析所有响应数据的结构
     const allFields = new Set();
-    responses.forEach(response => {
+    xhsResponses.forEach(response => {
       try {
         const data = JSON.parse(response.responseBody);
         const fields = analyzeJsonStructure(data);
@@ -219,35 +227,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     fieldSelector.style.display = 'block';
 
 
-  //   try {
-  //     const { responses = [] } = await chrome.storage.local.get('responses');
-  //     if (responses.length === 0) {
-  //       alert('没有可导出的数据');
-  //       return;
-  //     }
+    // 添加确认导出按钮的事件监听
+    document.getElementById('confirmExport').addEventListener('click', async () => {
+      try {
+        // 获取选中的字段
+        const selectedFields = Array.from(document.querySelectorAll('#fieldList input[type="checkbox"]:checked'))
+          .map(checkbox => checkbox.value);
 
-  //     const workbook = processedWorkbook || await processExcelData(responses, false);
-  //     const fileName = `note_list_${new Date().toISOString().split('T')[0]}.xlsx`;
-  //     const buffer = await workbook.xlsx.writeBuffer();
-  //     const blob = new Blob([buffer], { 
-  //       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-  //     });
-      
-  //     const a = document.createElement('a');
-  //     a.href = URL.createObjectURL(blob);
-  //     a.download = fileName;
-  //     document.body.appendChild(a);
-  //     a.click();
-      
-  //     setTimeout(() => {
-  //       document.body.removeChild(a);
-  //       URL.revokeObjectURL(a.href);
-  //     }, 0);
+        if (selectedFields.length === 0) {
+          alert('请至少选择一个字段！');
+          return;
+        }
 
-  //   } catch (error) {
-  //     console.error('导出失败:', error);
-  //     alert('导出失败: ' + error.message);
-  //   }
+        const workbook = processedWorkbook || await processExcelData(xhsResponses, false, selectedFields);
+        const fileName = `note_list_${new Date().toISOString().split('T')[0]}.xlsx`;
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { 
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+        });
+        
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(a.href);
+          fieldSelector.style.display = 'none';
+        }, 0);
+
+      } catch (error) {
+        console.error('导出失败:', error);
+        alert('导出失败: ' + error.message);
+      }
+    });
   });
 
   // // 打开设置页面
@@ -257,6 +272,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       window.open(chrome.runtime.getURL('src/html/options.html'));
     }
+  });
+
+  // 灵犀平台开关监听
+  ideaToggle.addEventListener('change', async (e) => {
+    const newState = e.target.checked;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'toggleIdeaCapture',
+        value: newState
+      });
+      if (response && response.success) {
+        await chrome.storage.local.set({ isIdeaCapturing: newState });
+      }
+    } catch (error) {
+      console.error('切换灵犀捕获状态失败:', error);
+      ideaToggle.checked = !newState;
+    }
+  });
+
+  // 灵犀导出按钮
+  ideaExportBtn.addEventListener('click', async () => {
+    const { responses = [] } = await chrome.storage.local.get('responses');
+    const ideaResponses = responses.filter(r => r.url.includes('idea.xiaohongshu.com'));
+    if (ideaResponses.length === 0) {
+      alert('没有可处理的灵犀数据！');
+      return;
+    }
+
+    await processIdeaData(ideaResponses);  // 传入过滤后的数据
   });
   
     // 全选按钮
@@ -395,6 +439,135 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 // 加载请求列表
+// 处理小红书数据
+async function processXhsData(responses) {
+  const xhsResponses = responses.filter(r => !r.url.includes('idea.xiaohongshu.com'));
+  if (xhsResponses.length === 0) {
+    alert('没有小红书数据！');
+    return;
+  }
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'processAndDownloadExcel',
+      responses: xhsResponses,
+      needProcess: true
+    });
+    console.log('小红书数据处理结果:', result);
+  } catch (error) {
+    console.error('处理小红书数据失败:', error);
+    alert('处理失败: ' + error.message);
+  }
+}
+
+// 处理灵犀数据
+async function processIdeaData(responses) {
+  // 过滤有效的灵犀响应
+  const ideaResponses = responses.filter(r => {
+    try {
+      const data = JSON.parse(r.responseBody);
+      return r.url.includes('idea.xiaohongshu.com') && 
+             data && data.data && Array.isArray(data.data.tableResult);
+    } catch (e) {
+      return false;
+    }
+  });
+
+  if (ideaResponses.length === 0) {
+    alert('没有可用的灵犀平台数据！');
+    return;
+  }
+
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('相聚百味数据');
+    
+    // 设置列
+    worksheet.columns = [
+      { header: '昵称', key: 'userNickName', width: 20 },
+      { header: '笔记标题', key: 'noteTitle', width: 30 },
+      { header: '笔记ID', key: 'noteId', width: 20 },
+      { header: '点赞数', key: 'likeNum', width: 15 },
+      { header: '笔记类型', key: 'noteType', width: 15 },
+      { header: '笔记链接', key: 'noteLink', width: 50 },
+      { header: '收藏数', key: 'favNum', width: 15 },
+      { header: '评论数', key: 'cmtNum', width: 15 },
+      { header: '图片数量', key: 'noteImageSize', width: 15 },
+      { header: '发布时间', key: 'createDate', width: 20 },
+      { header: '作者粉丝数', key: 'userFansNum', width: 15 },
+      { header: '笔记封面', key: 'notePoster', width: 50 },
+      { header: '笔记图片', key: 'noteImages', width: 50 },
+      { header: '视频时长(秒)', key: 'noteVideoDuration', width: 15 },
+      { header: '视频链接', key: 'noteVideoUrl', width: 50 }
+    ];
+
+    // 处理数据
+    let hasValidData = false;
+    for (const response of ideaResponses) {
+      try {
+        const data = JSON.parse(response.responseBody);
+        console.log('处理灵犀响应数据:', {
+          pageNum: data.data.pageNum,
+          pageSize: data.data.pageSize,
+          total: data.data.total,
+          totalPage: data.data.totalPage,
+          resultCount: data.data.tableResult.length
+        });
+        if (data.data.tableResult && Array.isArray(data.data.tableResult)) {
+          data.data.tableResult.forEach(row => {
+            // 添加数据验证
+            if (row && typeof row === 'object') {
+              // 确保必要字段存在
+              row.userNickName = row.userNickName || '';
+              row.noteTitle = row.noteTitle || '';
+              row.noteId = row.noteId || '';
+              // 确保数字字段为数字类型
+              row.likeNum = Number(row.likeNum) || 0;
+              row.favNum = Number(row.favNum) || 0;
+              row.cmtNum = Number(row.cmtNum) || 0;
+              row.noteImageSize = Number(row.noteImageSize) || 0;
+              
+              worksheet.addRow(row);
+              hasValidData = true;
+            }
+          });
+        }
+      } catch (error) {
+        console.error('处理响应数据失败:', error);
+        continue;
+      }
+    }
+
+    if (!hasValidData) {
+      alert('没有可用的数据！');
+      return;
+    }
+
+    await exportWorkbook(workbook, '相聚百味数据');
+  } catch (error) {
+    console.error('处理灵犀数据失败:', error);
+    alert('处理失败: ' + error.message);
+  }
+}
+
+// 统一的导出函数
+async function exportWorkbook(workbook, prefix) {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { 
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+  });
+  const url = URL.createObjectURL(blob);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+  await chrome.downloads.download({
+    url: url,
+    filename: `${prefix}_${timestamp}.xlsx`,
+    saveAs: true
+  });
+
+  URL.revokeObjectURL(url);
+}
+
 async function loadRequests() {
   const { responses = [] } = await chrome.storage.local.get('responses');
   const requestContainer = document.getElementById('requestContainer');
@@ -405,14 +578,19 @@ async function loadRequests() {
     return;
   }
 
+  // 添加数据源统计
+  const xhsResponses = responses.filter(r => !r.url.includes('idea.xiaohongshu.com'));
+  const ideaResponses = responses.filter(r => r.url.includes('idea.xiaohongshu.com'));
+  
   const totalCount = document.createElement('div');
   totalCount.className = 'total-count';
-  totalCount.innerHTML = `共计 ${responses.length} 条请求数据`;
+  totalCount.innerHTML = `共计 ${responses.length} 条请求数据（小红书：${xhsResponses.length}，灵犀：${ideaResponses.length}）`;
   requestContainer.appendChild(totalCount);
 
   responses.reverse().forEach((response, index) => {
     const item = document.createElement('div');
     item.className = 'request-item';
+    const isIdeaRequest = response.url.includes('idea.xiaohongshu.com');
     
     const time = new Date(response.timestamp).toLocaleString();
     
@@ -421,6 +599,7 @@ async function loadRequests() {
       <span>${time}</span>
       <span class="url-cell" title="${response.url}">${response.url}</span>
       <span>${response.type || 'unknown'}</span>
+      <span class="source-tag ${isIdeaRequest ? 'idea' : 'xhs'}">${isIdeaRequest ? '灵犀' : '小红书'}</span>
       <span>
         <button class="view-btn">查看</button>
       </span>
@@ -428,6 +607,7 @@ async function loadRequests() {
     
     const viewBtn = item.querySelector('.view-btn');
     viewBtn.addEventListener('click', () => {
+      console.log('查看请求详情:', response);  // 添加日志
       chrome.windows.create({
         url: chrome.runtime.getURL(`src/html/response-viewer.html?timestamp=${response.timestamp}`),
         type: 'popup',

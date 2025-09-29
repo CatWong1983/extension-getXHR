@@ -2,9 +2,13 @@ import '../lib/exceljs.min.js'
 
 
 let isCapturing = false;
+let isIdeaCapturing = false;  // 添加灵犀捕获状态
 let currentRequestId = null;
 let captureConfig = {
-  urlPatterns: ['https://ad.xiaohongshu.com/api/edith/ugc_heat/note_list'],
+  urlPatterns: [
+    'https://ad.xiaohongshu.com/api/edith/ugc_heat/note_list',
+    'https://idea.xiaohongshu.com/api/idea/chartview_single/code/hot_topic_rank_v2_note_list'
+  ],
   requestTypes: ['xmlhttprequest'],
   httpMethods: ['POST'],
   maxCaptures: 100
@@ -13,15 +17,18 @@ let capturedRequests = new Set();
 let currentProgress = '';
 
 // 从存储中加载配置
-chrome.storage.local.get(['captureConfig', 'isCapturing'], (result) => {
+chrome.storage.local.get(['captureConfig', 'isCapturing', 'isIdeaCapturing'], (result) => {
   if (result.captureConfig) {
     captureConfig = result.captureConfig;
   }
   if (typeof result.isCapturing !== 'undefined') {
     isCapturing = result.isCapturing;
-    if (isCapturing) {
-      addRequestListener();
-    }
+  }
+  if (typeof result.isIdeaCapturing !== 'undefined') {
+    isIdeaCapturing = result.isIdeaCapturing;
+  }
+  if (isCapturing || isIdeaCapturing) {
+    addRequestListener();
   }
 });
 
@@ -49,113 +56,157 @@ function removeRequestListener() {
   }
 }
 
-// 请求处理函数
-async function handleRequest(details) {
+// 解析请求体
+async function parseRequestBody(details) {
+  if (!details.requestBody || !details.requestBody.raw) return null;
+  
+  const rawData = new Uint8Array(details.requestBody.raw[0].bytes);
+  const decoder = new TextDecoder('utf-8');
+  const decodedStr = decoder.decode(rawData);
+  
+  try {
+    const body = JSON.parse(decodedStr);
+    if (body.hot_words) {
+      body.hot_words = body.hot_words.map(word => {
+        if (/[^\u0000-\u007F]/.test(word)) {
+          try {
+            const encoder = new TextEncoder();
+            const decoder = new TextDecoder('utf-8');
+            const encoded = encoder.encode(word);
+            return decoder.decode(encoded);
+          } catch (e) {
+            console.error('hot_words 解码失败:', e);
+            return word;
+          }
+        }
+        return word;
+      });
+    }
+    return body;
+  } catch (e) {
+    try {
+      const urlDecodedStr = decodeURIComponent(decodedStr);
+      return JSON.parse(urlDecodedStr);
+    } catch (error) {
+      console.error('请求体解析失败:', error);
+      return null;
+    }
+  }
+}
+
+// 处理之前的请求
+async function handlePreviousRequest(newRequestId, isIdea = false) {
+  if (currentRequestId) {
+    console.log(`终止请求 ${currentRequestId} 的处理`);
+    if (isIdea) {
+      isIdeaCapturing = false;
+    } else {
+      isCapturing = false;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await notifyPopup({ type: 'newCaptureStarted' });
+  }
+}
+
+// 处理请求错误
+function handleRequestError(error) {
+  console.error('捕获失败:', error);
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'images/icon48.png',
+    title: '捕获失败',
+    message: error.message
+  });
+}
+
+// 处理小红书广告请求
+async function handleXhsRequest(details) {
   if (!isCapturing) return;
   if (!shouldCaptureRequest(details)) return;
   
-  // 解析请求体
-  let originalBody = null;
-  if (details.requestBody && details.requestBody.raw) {
-    const rawData = new Uint8Array(details.requestBody.raw[0].bytes);
-    const decoder = new TextDecoder('utf-8');
-    const decodedStr = decoder.decode(rawData);
-    
-    try {
-      originalBody = JSON.parse(decodedStr);
-    } catch (e) {
-      try {
-        const urlDecodedStr = decodeURIComponent(decodedStr);
-        originalBody = JSON.parse(urlDecodedStr);
-      } catch (error) {
-        console.error('请求体解析失败:', error);
-        return;
-      }
-    }
-  }
+  const originalBody = await parseRequestBody(details);
+  console.log('解析的请求体:', originalBody);
 
-  // 只处理第一页的请求
-  if (originalBody && originalBody.page_num !== 1) {
+  if (!originalBody || originalBody.pageNum !== 1) {
+    console.log('跳过请求: 无效的请求体或非第一页');
     return;
   }
 
-  // 使用不包含页码的信息生成唯一标识
-  const { page_num, ...bodyWithoutPage } = originalBody;
+  const { pageNum, ...bodyWithoutPage } = originalBody;
   const requestKey = `${details.url}_${details.method}_${JSON.stringify(bodyWithoutPage)}`;
   if (capturedRequests.has(requestKey)) return;
-  
+
   const newRequestId = Date.now();
   
   try {
-    // 终止之前的请求循环
-    if (currentRequestId) {
-      console.log(`终止请求 ${currentRequestId} 的处理`);
-      isCapturing = false;
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      await notifyPopup({ type: 'newCaptureStarted' });
-    }
-
-    // 清空之前的请求记录并添加新的请求标识
+    await handlePreviousRequest(newRequestId, false);
+    
     capturedRequests.clear();
     capturedRequests.add(requestKey);
-    
-    // 更新当前请求ID和状态
     currentRequestId = newRequestId;
     isCapturing = true;
     
-    console.log('检测到请求:', details.url);
-    console.log('请求体:', details);
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     
-    // 解析原始请求体
-    let originalBody = null;
-    
-    if (details.requestBody && details.requestBody.raw) {
-      const rawData = new Uint8Array(details.requestBody.raw[0].bytes);
-      const decoder = new TextDecoder('utf-8');
-      const decodedStr = decoder.decode(rawData);
-      console.log('原始解码字符串:', decodedStr);
-      
-      try {
-        originalBody = JSON.parse(decodedStr);
-        
-        if (originalBody.hot_words) {
-          originalBody.hot_words = originalBody.hot_words.map(word => {
-            if (/[^\u0000-\u007F]/.test(word)) {
-              try {
-                const encoder = new TextEncoder();
-                const decoder = new TextDecoder('utf-8');
-                const encoded = encoder.encode(word);
-                return decoder.decode(encoded);
-              } catch (e) {
-                console.error('hot_words 解码失败:', e);
-                return word;
-              }
-            }
-            return word;
-          });
-        }
-      } catch (e) {
-        console.error('JSON解析失败，尝试二次解码:', e);
-        const urlDecodedStr = decodeURIComponent(decodedStr);
-        originalBody = JSON.parse(urlDecodedStr);
-      }
-      
-      console.log('处理后的请求体:', originalBody);
-    }
+    const firstPageResult = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: async (url, method, body) => {
+        const response = await fetch(url, {
+          method: method,
+          headers: {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'content-type': 'application/json;charset=UTF-8',
+            'v-seller-id': '677ce68e11448c00150b0547'
+          },
+          body: JSON.stringify(body),
+          credentials: 'include',
+          mode: 'cors',
+          referrerPolicy: 'strict-origin-when-cross-origin'
+        });
+        return await response.json();
+      },
+      args: [details.url, details.method, originalBody]
+    });
 
-    if (originalBody) {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const firstPageData = firstPageResult[0].result;
+    const total = firstPageData.data.total;
+    const pageSize = originalBody.page_size || 10;
+    const totalPages = Math.ceil(total / pageSize);
+
+    console.log(`总数据: ${total}, 总页数: ${totalPages}`);
+
+    for (let page = 1; page <= totalPages; page++) {
+      if (!isIdeaCapturing || currentRequestId !== newRequestId) {
+        console.log(`请求 ${newRequestId} 已被终止`);
+        break;
+      }
+
+      const pageBody = { ...originalBody, pageNum: page };
       
-      // 获取第一页数据和总数
-      const firstPageResult = await chrome.scripting.executeScript({
+      console.log('准备发送请求:', {
+        url: details.url,
+        method: details.method,
+        pageBody,
+        headers: {
+          'content-type': 'application/json;charset=UTF-8',
+          // 其他请求头...
+        }
+      });
+
+      const result = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async (url, method, body) => {
+          const randomDelay = Math.floor(Math.random() * 1000) + 500;
+          await new Promise(resolve => setTimeout(resolve, randomDelay));
+
           const response = await fetch(url, {
             method: method,
             headers: {
               'accept': 'application/json, text/plain, */*',
               'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
               'content-type': 'application/json;charset=UTF-8',
+              'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               'v-seller-id': '677ce68e11448c00150b0547'
             },
             body: JSON.stringify(body),
@@ -163,123 +214,305 @@ async function handleRequest(details) {
             mode: 'cors',
             referrerPolicy: 'strict-origin-when-cross-origin'
           });
-          return await response.json();
+
+          if (!response.ok) {
+            throw new Error(`请求失败: ${response.status}`);
+          }
+
+          return {
+            body: await response.text(),
+            status: response.status,
+            headers: Object.fromEntries(response.headers)
+          };
         },
-        args: [details.url, details.method, originalBody]
+        args: [details.url, details.method, pageBody]
       });
 
-      const firstPageData = firstPageResult[0].result;
-      const total = firstPageData.data.total;
-      const pageSize = originalBody.page_size || 10;
-      const totalPages = Math.ceil(total / pageSize);
+      const responseData = result[0].result;
 
-      console.log(`总数据: ${total}, 总页数: ${totalPages}`);
-
-      // 获取所有页面的数据
-      for (let page = 1; page <= totalPages; page++) {
-        if (!isCapturing || currentRequestId !== newRequestId) {
-          console.log(`请求 ${newRequestId} 已被终止`);
-          break;
-        }
-
-        const pageBody = { ...originalBody, page_num: page };
-        
-        const result = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: async (url, method, body) => {
-            const randomDelay = Math.floor(Math.random() * 1000) + 500;
-            await new Promise(resolve => setTimeout(resolve, randomDelay));
-
-            const response = await fetch(url, {
-              method: method,
-              headers: {
-                'accept': 'application/json, text/plain, */*',
-                'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'content-type': 'application/json;charset=UTF-8',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'v-seller-id': '677ce68e11448c00150b0547'
-              },
-              body: JSON.stringify(body),
-              credentials: 'include',
-              mode: 'cors',
-              referrerPolicy: 'strict-origin-when-cross-origin'
-            });
-
-            if (!response.ok) {
-              throw new Error(`请求失败: ${response.status}`);
-            }
-
-            return {
-              body: await response.text(),
-              status: response.status,
-              headers: Object.fromEntries(response.headers)
-            };
-          },
-          args: [details.url, details.method, pageBody]
-        });
-
-        const responseData = result[0].result;
-
-        // 添加页码和分组信息到保存的数据中
-        await saveResponse({
-          url: details.url,
-          timestamp: Date.now(),
-          method: details.method,
-          type: details.type,
-          page: page,
-          totalPages: totalPages,
-          requestBody: JSON.stringify(pageBody),
-          responseBody: responseData.body,
-          statusCode: responseData.status,
-          headers: responseData.headers,
-          groupId: originalBody.list_type + '_' + originalBody.date  // 添加分组标识
-        });
-
-        const baseDelay = 2000;
-        const pageDelay = Math.min(page * 500, 3000);
-        const randomDelay = Math.floor(Math.random() * 1000);
-        await new Promise(resolve => setTimeout(resolve, baseDelay + pageDelay + randomDelay));
-      }
-
-      // 发送通知
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'images/icon48.png',
-        title: '捕获成功',
-        message: `已捕获所有页面数据: ${details.url.substring(0, 50)}...`
+      console.log('页面数据保存结果:', {
+        page,
+        status: responseData.status,
+        bodyLength: responseData.body.length
       });
+      await saveResponse({
+        url: details.url,
+        timestamp: Date.now(),
+        method: details.method,
+        type: details.type,
+        page: page,
+        totalPages: totalPages,
+        requestBody: JSON.stringify(pageBody),
+        responseBody: responseData.body,
+        statusCode: responseData.status,
+        headers: responseData.headers,
+        groupId: originalBody.list_type + '_' + originalBody.date
+      });
+
+      const baseDelay = 2000;
+      const pageDelay = Math.min(page * 500, 3000);
+      const randomDelay = Math.floor(Math.random() * 1000);
+      await new Promise(resolve => setTimeout(resolve, baseDelay + pageDelay + randomDelay));
     }
-  } catch (error) {
-    console.error('捕获失败:', error);
+
     chrome.notifications.create({
       type: 'basic',
       iconUrl: 'images/icon48.png',
-      title: '捕获失败',
-      message: error.message
+      title: '捕获成功',
+      message: `已捕获所有页面数据: ${details.url.substring(0, 50)}...`
     });
+  } catch (error) {
+    console.error('处理灵犀请求失败，详细错误:', {
+      error,
+      message: error.message,
+      stack: error.stack
+    });
+    handleRequestError(error);
   } finally {
-    if (currentRequestId === newRequestId) {
-      currentRequestId = null;
-      isCapturing = true;
-    }
+      if (currentRequestId === newRequestId) {
+        currentRequestId = null;
+      }
     setTimeout(() => {
       capturedRequests.delete(requestKey);
     }, 5000);
   }
 }
 
+// 处理灵犀请求
+async function handleIdeaRequest(details) {
+  console.log('开始处理灵犀请求:', {
+    url: details.url,
+    isIdeaCapturing,
+    currentRequestId,
+    capturedRequests: Array.from(capturedRequests)
+  });
+
+  if (!isIdeaCapturing) {
+    console.log('灵犀捕获未开启，跳过请求');
+    return;
+  }
+  if (!shouldCaptureRequest(details)) return;
+
+  const originalBody = await parseRequestBody(details);
+  console.log('解析的请求体:', originalBody);
+
+  if (!originalBody || originalBody.pageNum !== 1) {
+    console.log('跳过请求: 无效的请求体或非第一页');
+    return;
+  }
+
+  const { pageNum, ...bodyWithoutPage } = originalBody;
+  const requestKey = `${details.url}_${details.method}_${JSON.stringify(bodyWithoutPage)}`;
+  if (capturedRequests.has(requestKey)) return;
+
+  const newRequestId = Date.now();
+
+  try {
+    await handlePreviousRequest(newRequestId, true);
+    console.log('已处理之前的请求，开始新请求处理:', { newRequestId });
+    
+    capturedRequests.clear();
+    capturedRequests.add(requestKey);
+    currentRequestId = newRequestId;
+    isIdeaCapturing = true;
+    
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    console.log('获取当前标签页:', { tabId: tab?.id, url: tab?.url });
+    
+    console.log('准备执行首次请求:', {
+      url: details.url,
+      method: details.method,
+      body: originalBody
+    });
+
+    const result = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: async (url, method, body) => {
+        console.log('注入脚本开始执行请求:', { url, method, body });
+        const response = await fetch(url, {
+          method: method,
+          headers: {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'content-type': 'application/json;charset=UTF-8',
+            'Cookie': '...'
+          },
+          body: JSON.stringify(body),
+          credentials: 'include'
+        });
+        const responseData = await response.json();
+        console.log('请求响应:', responseData);
+        return responseData;
+      },
+      args: [details.url, details.method, originalBody]
+    });
+
+    console.log('首次请求结果:', result);
+    const firstPageData = result[0].result;
+    console.log('解析首页数据:', {
+      hasData: !!firstPageData,
+      dataStructure: firstPageData ? Object.keys(firstPageData) : null,
+      responseData: firstPageData
+    });
+
+    const total = firstPageData.data.total;
+    const totalPages = firstPageData.data.totalPage;
+    const pageSize = firstPageData.data.pageSize;
+
+    console.log('分页信息:', { total, totalPages, pageSize });
+
+    for (let page = 1; page <= totalPages; page++) {
+      console.log(`开始处理第 ${page}/${totalPages} 页`);
+      
+      if (!isIdeaCapturing || currentRequestId !== newRequestId) {
+        console.log('捕获已停止或请求已更新:', { isIdeaCapturing, currentRequestId, newRequestId });
+        break;
+      }
+
+      const pageBody = { ...originalBody, pageNum: page };
+      console.log('当前页请求参数:', pageBody);
+      if (!isIdeaCapturing || currentRequestId !== newRequestId) {
+        console.log(`请求 ${newRequestId} 已被终止`);
+        break;
+      }
+
+      console.log('准备发送请求:', {
+        url: details.url,
+        method: details.method,
+        pageBody,
+        headers: {
+          'content-type': 'application/json;charset=UTF-8',
+          // 其他请求头...
+        }
+      });
+
+      const result = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async (url, method, body) => {
+          const randomDelay = Math.floor(Math.random() * 1000) + 500;
+          await new Promise(resolve => setTimeout(resolve, randomDelay));
+
+          const response = await fetch(url, {
+            method: method,
+            headers: {
+              'accept': 'application/json, text/plain, */*',
+              'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+              'content-type': 'application/json;charset=UTF-8',
+              'Cookie': '...'
+            },
+            body: JSON.stringify(body),
+            credentials: 'include'
+          });
+
+          if (!response.ok) {
+            throw new Error(`请求失败: ${response.status}`);
+          }
+
+          return {
+            body: await response.text(),
+            status: response.status,
+            headers: Object.fromEntries(response.headers)
+          };
+        },
+        args: [details.url, details.method, pageBody]
+      });
+
+      const responseData = result[0].result;
+
+      console.log('页面数据保存结果:', {
+        page,
+        status: responseData.status,
+        bodyLength: responseData.body.length
+      });
+      await saveResponse({
+        url: details.url,
+        timestamp: Date.now(),
+        method: details.method,
+        type: details.type,
+        page: page,
+        totalPages: totalPages,
+        requestBody: JSON.stringify(pageBody),
+        responseBody: responseData.body,
+        statusCode: responseData.status,
+        headers: responseData.headers,
+        groupId: originalBody.list_type + '_' + originalBody.date
+      });
+
+      const baseDelay = 2000;
+      const pageDelay = Math.min(page * 500, 3000);
+      const randomDelay = Math.floor(Math.random() * 1000);
+      await new Promise(resolve => setTimeout(resolve, baseDelay + pageDelay + randomDelay));
+    }
+
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: 'images/icon48.png',
+      title: '捕获成功',
+      message: `已捕获所有页面数据: ${details.url.substring(0, 50)}...`
+    });
+  } catch (error) {
+    console.error('处理灵犀请求失败，详细错误:', {
+      error,
+      message: error.message,
+      stack: error.stack
+    });
+    handleRequestError(error);
+  } finally {
+      if (currentRequestId === newRequestId) {
+        currentRequestId = null;
+      }
+    setTimeout(() => {
+      capturedRequests.delete(requestKey);
+    }, 5000);
+  }
+}
+
+// 主请求处理函数
+async function handleRequest(details) {
+  const isIdeaRequest = details.url.includes('idea.xiaohongshu.com');
+  
+  if (isIdeaRequest) {
+    console.log('收到请求:', {
+      url: details.url,
+      isIdeaRequest,
+      isIdeaCapturing,
+      isCapturing,
+      method: details.method,
+      type: details.type
+    });
+    
+    return handleIdeaRequest(details);
+  } else {
+    return handleXhsRequest(details);
+  }
+}
+
 function shouldCaptureRequest(details) {
+  console.log('检查是否应该捕获请求:', {
+    url: details.url,
+    type: details.type,
+    method: details.method,
+    urlPatterns: captureConfig.urlPatterns,
+    requestTypes: captureConfig.requestTypes,
+    httpMethods: captureConfig.httpMethods
+  });
+
   if (captureConfig.urlPatterns.length > 0) {
     const matchesPattern = captureConfig.urlPatterns.some(pattern => {
       try {
         const regex = new RegExp(pattern);
-        return regex.test(details.url);
+        const matches = regex.test(details.url);
+        console.log('URL匹配结果:', { pattern, matches });
+        return matches;
       } catch (e) {
         console.error('正则表达式错误:', e);
         return false;
       }
     });
-    if (!matchesPattern) return false;
+    if (!matchesPattern) {
+      console.log('URL不匹配任何模式，跳过请求');
+      return false;
+    }
   }
 
   if (captureConfig.requestTypes.length > 0) {
@@ -301,6 +534,14 @@ function shouldCaptureRequest(details) {
 }
 
 async function saveResponse(capturedData) {
+  console.log('准备保存响应数据:', {
+    url: capturedData.url,
+    timestamp: capturedData.timestamp,
+    page: capturedData.page,
+    totalPages: capturedData.totalPages,
+    statusCode: capturedData.statusCode
+  });
+
   try {
     const { responses = [] } = await chrome.storage.local.get('responses');
     responses.push(capturedData);
@@ -310,6 +551,7 @@ async function saveResponse(capturedData) {
     }
     
     await chrome.storage.local.set({ responses });
+    console.log('成功保存响应数据，当前总数:', responses.length);
   } catch (error) {
     console.error('保存失败:', error);
   }
@@ -624,19 +866,34 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
   if (message.type === 'toggleCapture') {
     try {
       isCapturing = message.value;
-      
-      if (isCapturing) {
-        // 重置请求集合
+      if (isCapturing || isIdeaCapturing) {
         capturedRequests.clear();
         addRequestListener();
-      } else {
+      } else if (!isCapturing && !isIdeaCapturing) {
         removeRequestListener();
       }
-      
       console.log('捕获状态已切换:', isCapturing);
       sendResponse({ success: true });
     } catch (error) {
       console.error('切换捕获状态失败:', error);
+      sendResponse({ success: false, error: error.message });
+    }
+    return true;
+  }
+
+  if (message.type === 'toggleIdeaCapture') {
+    try {
+      isIdeaCapturing = message.value;
+      if (isCapturing || isIdeaCapturing) {
+        capturedRequests.clear();
+        addRequestListener();
+      } else if (!isCapturing && !isIdeaCapturing) {
+        removeRequestListener();
+      }
+      console.log('灵犀捕获状态已切换:', isIdeaCapturing);
+      sendResponse({ success: true });
+    } catch (error) {
+      console.error('切换灵犀捕获状态失败:', error);
       sendResponse({ success: false, error: error.message });
     }
     return true;
