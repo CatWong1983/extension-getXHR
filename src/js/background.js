@@ -16,6 +16,10 @@ let captureConfig = {
 let capturedRequests = new Set();
 let currentProgress = '';
 
+// 灵犀请求筛选项缓存
+let ideaFilterCache = new Map();
+let currentIdeaFilter = null;
+
 // 从存储中加载配置
 chrome.storage.local.get(['captureConfig', 'isCapturing', 'isIdeaCapturing'], (result) => {
   if (result.captureConfig) {
@@ -278,6 +282,59 @@ async function handleXhsRequest(details) {
   }
 }
 
+// 生成筛选项的唯一标识符
+function generateFilterKey(filterData) {
+  // 排除pageNum和pageSize，只关注筛选条件
+  const { pageNum, pageSize, ...filterOnly } = filterData;
+  return JSON.stringify(filterOnly, Object.keys(filterOnly).sort());
+}
+
+// 检查筛选项是否发生变化
+function hasFilterChanged(newFilter) {
+  if (!currentIdeaFilter) {
+    return true; // 第一次请求
+  }
+  
+  const newFilterKey = generateFilterKey(newFilter);
+  const currentFilterKey = generateFilterKey(currentIdeaFilter);
+  
+  return newFilterKey !== currentFilterKey;
+}
+
+// 更新筛选项缓存
+function updateFilterCache(filterData) {
+  currentIdeaFilter = { ...filterData };
+  const filterKey = generateFilterKey(filterData);
+  ideaFilterCache.set(filterKey, {
+    filter: { ...filterData },
+    timestamp: Date.now(),
+    isProcessing: false
+  });
+}
+
+// 检查筛选项是否正在处理中
+function isFilterProcessing(filterData) {
+  const filterKey = generateFilterKey(filterData);
+  const cached = ideaFilterCache.get(filterKey);
+  return cached && cached.isProcessing;
+}
+
+// 设置筛选项处理状态
+function setFilterProcessingStatus(filterData, isProcessing) {
+  const filterKey = generateFilterKey(filterData);
+  let cached = ideaFilterCache.get(filterKey);
+  if (!cached) {
+    // 如果缓存不存在，创建一个新的缓存条目
+    cached = {
+      filter: { ...filterData },
+      timestamp: Date.now(),
+      isProcessing: false
+    };
+    ideaFilterCache.set(filterKey, cached);
+  }
+  cached.isProcessing = isProcessing;
+}
+
 // 处理灵犀请求
 async function handleIdeaRequest(details) {
   console.log('开始处理灵犀请求:', {
@@ -296,9 +353,45 @@ async function handleIdeaRequest(details) {
   const originalBody = await parseRequestBody(details);
   console.log('解析的请求体:', originalBody);
 
-  if (!originalBody || originalBody.pageNum !== 1) {
-    console.log('跳过请求: 无效的请求体或非第一页');
+  if (!originalBody) {
+    console.log('跳过请求: 无效的请求体');
     return;
+  }
+
+  // 检查筛选项是否发生变化
+  const filterChanged = hasFilterChanged(originalBody);
+  console.log('筛选项变化检查:', {
+    filterChanged,
+    currentFilter: currentIdeaFilter,
+    newFilter: originalBody
+  });
+
+  // 如果筛选项正在处理中且没有变化，跳过请求
+  if (!filterChanged && isFilterProcessing(originalBody)) {
+    console.log('筛选项正在处理中，跳过重复请求');
+    return;
+  }
+
+  // 如果不是第一页且筛选项没有变化，跳过请求
+  if (!filterChanged && originalBody.pageNum !== 1) {
+    console.log('跳过请求: 筛选项未变化且非第一页');
+    return;
+  }
+
+  // 如果筛选项发生变化，强制从第一页开始
+  if (filterChanged) {
+    console.log('筛选项已变化，强制从第一页开始请求');
+    // 修改请求体，强制从第一页开始
+    originalBody.pageNum = 1;
+    
+    // 清空之前的响应数据
+    console.log('清空之前的响应数据');
+    try {
+      await chrome.storage.local.set({ responses: [] });
+      console.log('成功清空之前的响应数据');
+    } catch (error) {
+      console.error('清空响应数据失败:', error);
+    }
   }
 
   const { pageNum, ...bodyWithoutPage } = originalBody;
@@ -306,10 +399,16 @@ async function handleIdeaRequest(details) {
   if (capturedRequests.has(requestKey)) return;
 
   const newRequestId = Date.now();
+  let processingStarted = false; // 添加标志来跟踪是否开始了处理
 
   try {
     await handlePreviousRequest(newRequestId, true);
     console.log('已处理之前的请求，开始新请求处理:', { newRequestId });
+    
+    // 更新筛选项缓存和处理状态
+    updateFilterCache(originalBody);
+    setFilterProcessingStatus(originalBody, true);
+    processingStarted = true; // 标记处理已开始
     
     capturedRequests.clear();
     capturedRequests.add(requestKey);
@@ -335,7 +434,7 @@ async function handleIdeaRequest(details) {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
             'content-type': 'application/json;charset=UTF-8',
-            'Cookie': '...'
+            'Cookie': ''
           },
           body: JSON.stringify(body),
           credentials: 'include'
@@ -356,10 +455,18 @@ async function handleIdeaRequest(details) {
     });
 
     const total = firstPageData.data.total;
-    const totalPages = firstPageData.data.totalPage;
-    const pageSize = firstPageData.data.pageSize;
+    const originalPageSize = firstPageData.data.pageSize;
+    // 使用更大的pageSize来减少请求次数，但不要太大以避免反爬
+    const pageSize = Math.min(50, originalPageSize * 5); // 最大50，通常是原来的5倍
+    const totalPages = Math.ceil(total / pageSize);
 
-    console.log('分页信息:', { total, totalPages, pageSize });
+    console.log('分页信息:', { 
+      total, 
+      originalPageSize, 
+      optimizedPageSize: pageSize, 
+      totalPages,
+      reduction: `从${Math.ceil(total / originalPageSize)}页减少到${totalPages}页`
+    });
 
     for (let page = 1; page <= totalPages; page++) {
       console.log(`开始处理第 ${page}/${totalPages} 页`);
@@ -369,7 +476,7 @@ async function handleIdeaRequest(details) {
         break;
       }
 
-      const pageBody = { ...originalBody, pageNum: page };
+      const pageBody = { ...originalBody, pageNum: page, pageSize: pageSize };
       console.log('当前页请求参数:', pageBody);
       if (!isIdeaCapturing || currentRequestId !== newRequestId) {
         console.log(`请求 ${newRequestId} 已被终止`);
@@ -398,7 +505,7 @@ async function handleIdeaRequest(details) {
               'accept': 'application/json, text/plain, */*',
               'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
               'content-type': 'application/json;charset=UTF-8',
-              'Cookie': '...'
+              'Cookie': ''
             },
             body: JSON.stringify(body),
             credentials: 'include'
@@ -458,9 +565,13 @@ async function handleIdeaRequest(details) {
     });
     handleRequestError(error);
   } finally {
-      if (currentRequestId === newRequestId) {
-        currentRequestId = null;
-      }
+    if (currentRequestId === newRequestId) {
+      currentRequestId = null;
+    }
+    // 重置筛选项处理状态（只有在处理开始后才重置）
+    if (processingStarted && originalBody) {
+      setFilterProcessingStatus(originalBody, false);
+    }
     setTimeout(() => {
       capturedRequests.delete(requestKey);
     }, 5000);
