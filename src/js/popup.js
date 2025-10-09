@@ -569,25 +569,59 @@ async function exportWorkbook(workbook, prefix) {
 }
 
 async function loadRequests() {
-  const { responses = [] } = await chrome.storage.local.get('responses');
+  const { responses = [], currentSessionId } = await chrome.storage.local.get(['responses','currentSessionId']);
   const requestContainer = document.getElementById('requestContainer');
   requestContainer.innerHTML = '';
 
-  if (responses.length === 0) {
+  const sessionResponses = currentSessionId ? responses.filter(r => r.sessionId === currentSessionId) : responses;
+
+  if (sessionResponses.length === 0) {
     requestContainer.innerHTML = '<div class="empty-message">暂无捕获的请求</div>';
     return;
   }
 
   // 添加数据源统计
-  const xhsResponses = responses.filter(r => !r.url.includes('idea.xiaohongshu.com'));
-  const ideaResponses = responses.filter(r => r.url.includes('idea.xiaohongshu.com'));
+  const xhsResponses = sessionResponses.filter(r => !r.url.includes('idea.xiaohongshu.com'));
+  const ideaResponses = sessionResponses.filter(r => r.url.includes('idea.xiaohongshu.com'));
   
   const totalCount = document.createElement('div');
   totalCount.className = 'total-count';
-  totalCount.innerHTML = `共计 ${responses.length} 条请求数据（小红书：${xhsResponses.length}，灵犀：${ideaResponses.length}）`;
+  // 计算当前进度与状态
+  const latestIdea = ideaResponses.length ? ideaResponses[ideaResponses.length - 1] : null;
+  const latestXhs = xhsResponses.length ? xhsResponses[xhsResponses.length - 1] : null;
+  let currentPage = undefined;
+  let totalPages = undefined;
+  let statusText = '未知';
+
+  // 优先使用灵犀的分页信息，其次使用小红书的
+  if (latestIdea && typeof latestIdea.page === 'number' && typeof latestIdea.totalPages === 'number') {
+    currentPage = latestIdea.page;
+    totalPages = latestIdea.totalPages;
+    statusText = currentPage >= totalPages ? '请求完成' : '请求中';
+  } else if (latestXhs && typeof latestXhs.page === 'number' && typeof latestXhs.totalPages === 'number') {
+    currentPage = latestXhs.page;
+    totalPages = latestXhs.totalPages;
+    statusText = currentPage >= totalPages ? '请求完成' : '请求中';
+  } else {
+    // 无分页信息时根据响应数量进行粗略判断
+    statusText = responses.length > 0 ? '请求中' : '未开始';
+  }
+
+  // 简洁直观的顶部文案
+  const sourceLabel = latestIdea ? '灵犀' : (latestXhs ? '小红书' : '捕获');
+  let summaryText = '';
+  if (currentPage && totalPages) {
+    summaryText = `${sourceLabel} ${currentPage}/${totalPages} · ${statusText}`;
+  } else if (sessionResponses.length > 0) {
+    summaryText = `已捕获 ${sessionResponses.length} 条 · ${statusText}`;
+  } else {
+    summaryText = '未开始';
+  }
+
+  totalCount.innerText = summaryText;
   requestContainer.appendChild(totalCount);
 
-  responses.reverse().forEach((response, index) => {
+  sessionResponses.reverse().forEach((response, index) => {
     const item = document.createElement('div');
     item.className = 'request-item';
     const isIdeaRequest = response.url.includes('idea.xiaohongshu.com');
@@ -595,7 +629,7 @@ async function loadRequests() {
     const time = new Date(response.timestamp).toLocaleString();
     
     item.innerHTML = `
-      <span>#${responses.length - index}</span>
+      <span>#${sessionResponses.length - index}</span>
       <span>${time}</span>
       <span class="url-cell" title="${response.url}">${response.url}</span>
       <span>${response.type || 'unknown'}</span>

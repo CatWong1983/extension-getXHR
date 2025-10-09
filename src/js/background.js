@@ -15,6 +15,8 @@ let captureConfig = {
 };
 let capturedRequests = new Set();
 let currentProgress = '';
+// 当前捕获会话标识，用于隔离不同筛选条件的响应
+let currentSessionId = null;
 
 // 灵犀请求筛选项缓存
 let ideaFilterCache = new Map();
@@ -404,6 +406,15 @@ async function handleIdeaRequest(details) {
   try {
     await handlePreviousRequest(newRequestId, true);
     console.log('已处理之前的请求，开始新请求处理:', { newRequestId });
+    // 启动新的会话并清空旧数据，避免残留
+    const sessionId = Date.now();
+    currentSessionId = sessionId;
+    try {
+      await chrome.storage.local.set({ currentSessionId: sessionId, responses: [] });
+      console.log('已初始化新会话并清空旧数据:', sessionId);
+    } catch (e) {
+      console.error('初始化会话或清空数据失败:', e);
+    }
     
     // 更新筛选项缓存和处理状态
     updateFilterCache(originalBody);
@@ -542,7 +553,8 @@ async function handleIdeaRequest(details) {
         responseBody: responseData.body,
         statusCode: responseData.status,
         headers: responseData.headers,
-        groupId: originalBody.list_type + '_' + originalBody.date
+        groupId: originalBody.list_type + '_' + originalBody.date,
+        sessionId: sessionId
       });
 
       const baseDelay = 2000;
